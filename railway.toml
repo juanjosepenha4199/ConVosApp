@@ -1,0 +1,9 @@
+# ConVos API desde la raíz del monorepo (npm workspaces).
+# En Railway: conecta este repo y NO pongas "Root Directory" en apps/api.
+
+[build]
+buildCommand = "npm ci && npm run build -w api"
+
+[deploy]
+startCommand = "npm run start:prod -w api"
+releaseCommand = "cd apps/api && npx prisma migrate deploy --schema prisma/schema.prisma"
