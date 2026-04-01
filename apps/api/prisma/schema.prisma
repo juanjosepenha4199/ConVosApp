@@ -1,0 +1,374 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum GroupType {
+  couple
+  friends
+  family
+  other
+}
+
+enum GroupRole {
+  admin
+  member
+}
+
+enum PlanType {
+  date
+  food
+  trip
+  sport
+  hangout
+  other
+}
+
+enum PlanStatus {
+  scheduled
+  cancelled
+  completed
+  expired
+}
+
+enum ParticipantStatus {
+  invited
+  accepted
+  declined
+}
+
+enum ValidationStatus {
+  accepted
+  rejected
+  pending_review
+}
+
+enum PointsReason {
+  plan_completed
+  streak_bonus
+  creative_bonus
+  cancel_penalty
+  mission_completed
+  admin_adjustment
+}
+
+enum ChallengeScope {
+  global
+  group
+  user
+}
+
+enum ChallengeAssignmentStatus {
+  active
+  completed
+  expired
+}
+
+enum FeedItemType {
+  plan_validated
+  plan_created
+  mission_completed
+  achievement
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String?  @map("password_hash")
+  name         String?
+  avatarUrl    String?  @map("avatar_url")
+  googleSub    String?  @unique @map("google_sub")
+  level        Int      @default(1)
+  totalPoints  Int      @default(0) @map("total_points")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  refreshTokens        RefreshToken[]
+  groups               GroupMember[]
+  createdGroups        Group[]                    @relation("GroupCreatedBy")
+  plansCreated         Plan[]                     @relation("PlanCreatedBy")
+  planParticipants     PlanParticipant[]
+  photos               Photo[]
+  validations          PlanValidation[]
+  points               PointsLedger[]
+  streak               Streak?
+  feedItems            FeedItem[]
+  pushSubs             NotificationSubscription[]
+  invites              GroupInvite[]              @relation("InviteCreatedBy")
+  challengeAssignments ChallengeAssignment[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @map("token_hash")
+  revokedAt DateTime? @map("revoked_at")
+  expiresAt DateTime  @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Group {
+  id        String    @id @default(uuid())
+  name      String
+  type      GroupType
+  avatarUrl String?   @map("avatar_url")
+  createdBy String    @map("created_by")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  creator              User                  @relation("GroupCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  members              GroupMember[]
+  invites              GroupInvite[]
+  plans                Plan[]
+  points               PointsLedger[]
+  feed                 FeedItem[]
+  challengeAssignments ChallengeAssignment[]
+
+  @@map("groups")
+}
+
+model GroupMember {
+  groupId  String    @map("group_id")
+  userId   String    @map("user_id")
+  role     GroupRole
+  joinedAt DateTime  @default(now()) @map("joined_at")
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, userId])
+  @@index([userId])
+  @@index([groupId, role])
+  @@map("group_members")
+}
+
+model GroupInvite {
+  id        String   @id @default(uuid())
+  groupId   String   @map("group_id")
+  createdBy String   @map("created_by")
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+  maxUses   Int?     @map("max_uses")
+  uses      Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  group   Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  creator User  @relation("InviteCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([groupId])
+  @@map("group_invites")
+}
+
+model Place {
+  id            String   @id @default(uuid())
+  googlePlaceId String   @unique @map("google_place_id")
+  name          String
+  address       String
+  lat           Decimal  @db.Decimal(9, 6)
+  lng           Decimal  @db.Decimal(9, 6)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  plans Plan[]
+
+  @@map("places")
+}
+
+model Plan {
+  id                 String     @id @default(uuid())
+  groupId            String     @map("group_id")
+  createdBy          String     @map("created_by")
+  title              String
+  type               PlanType
+  scheduledAt        DateTime   @map("scheduled_at")
+  placeId            String     @map("place_id")
+  locationRadiusM    Int        @default(250) @map("location_radius_m")
+  status             PlanStatus @default(scheduled)
+  cancelledBy        String?    @map("cancelled_by")
+  cancelledReason    String?    @map("cancelled_reason")
+  requiresAllConfirm Boolean    @default(false) @map("requires_all_confirm")
+  createdAt          DateTime   @default(now()) @map("created_at")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+
+  group   Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  creator User  @relation("PlanCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  place   Place @relation(fields: [placeId], references: [id], onDelete: Restrict)
+
+  participants PlanParticipant[]
+  validations  PlanValidation[]
+  points       PointsLedger[]
+  feedItems    FeedItem[]
+
+  @@index([groupId])
+  @@index([scheduledAt])
+  @@map("plans")
+}
+
+model PlanParticipant {
+  planId String            @map("plan_id")
+  userId String            @map("user_id")
+  status ParticipantStatus @default(invited)
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([planId, userId])
+  @@map("plan_participants")
+}
+
+model Photo {
+  id               String    @id @default(uuid())
+  ownerUserId      String    @map("owner_user_id")
+  storageKey       String    @unique @map("storage_key")
+  publicUrl        String?   @map("public_url")
+  width            Int?
+  height           Int?
+  mimeType         String?   @map("mime_type")
+  sha256           String?   @map("sha256")
+  capturedAtClient DateTime? @map("captured_at_client")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  owner       User             @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  validations PlanValidation[]
+  feedItems   FeedItem[]
+
+  @@index([sha256])
+  @@index([ownerUserId])
+  @@map("photos")
+}
+
+model PlanValidation {
+  id                String           @id @default(uuid())
+  planId            String           @map("plan_id")
+  userId            String           @map("user_id")
+  photoId           String           @map("photo_id")
+  capturedAtClient  DateTime         @map("captured_at_client")
+  submittedAtServer DateTime         @default(now()) @map("submitted_at_server")
+  lat               Decimal          @db.Decimal(9, 6)
+  lng               Decimal          @db.Decimal(9, 6)
+  distanceToPlanM   Int              @map("distance_to_plan_m")
+  status            ValidationStatus
+  rejectReason      String?          @map("reject_reason")
+  metadata          Json?
+
+  plan  Plan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  photo Photo @relation(fields: [photoId], references: [id], onDelete: Restrict)
+
+  @@unique([planId, userId])
+  @@index([planId])
+  @@index([userId])
+  @@map("plan_validations")
+}
+
+model PointsLedger {
+  id        String       @id @default(uuid())
+  userId    String       @map("user_id")
+  groupId   String       @map("group_id")
+  planId    String?      @map("plan_id")
+  amount    Int
+  reason    PointsReason
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  plan  Plan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([groupId])
+  @@index([planId])
+  @@map("points_ledger")
+}
+
+model Streak {
+  id              String    @id @default(uuid())
+  userId          String    @unique @map("user_id")
+  currentStreak   Int       @default(0) @map("current_streak")
+  bestStreak      Int       @default(0) @map("best_streak")
+  lastValidatedAt DateTime? @map("last_validated_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("streaks")
+}
+
+model Challenge {
+  id           String         @id @default(uuid())
+  scope        ChallengeScope
+  title        String
+  description  String
+  rule         Json
+  startAt      DateTime       @map("start_at")
+  endAt        DateTime       @map("end_at")
+  pointsReward Int            @map("points_reward")
+  createdAt    DateTime       @default(now()) @map("created_at")
+
+  assignments ChallengeAssignment[]
+
+  @@map("challenges")
+}
+
+model ChallengeAssignment {
+  id          String                    @id @default(uuid())
+  challengeId String                    @map("challenge_id")
+  userId      String?                   @map("user_id")
+  groupId     String?                   @map("group_id")
+  status      ChallengeAssignmentStatus @default(active)
+  progress    Json?
+  completedAt DateTime?                 @map("completed_at")
+
+  challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group     Group?    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([challengeId])
+  @@index([userId])
+  @@index([groupId])
+  @@map("challenge_assignments")
+}
+
+model FeedItem {
+  id          String       @id @default(uuid())
+  groupId     String       @map("group_id")
+  type        FeedItemType
+  planId      String?      @map("plan_id")
+  photoId     String?      @map("photo_id")
+  actorUserId String       @map("actor_user_id")
+  occurredAt  DateTime     @map("occurred_at")
+  payload     Json?
+
+  group Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  actor User   @relation(fields: [actorUserId], references: [id], onDelete: Cascade)
+  plan  Plan?  @relation(fields: [planId], references: [id], onDelete: SetNull)
+  photo Photo? @relation(fields: [photoId], references: [id], onDelete: SetNull)
+
+  @@index([groupId])
+  @@index([occurredAt])
+  @@map("feed_items")
+}
+
+model NotificationSubscription {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  endpoint  String    @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime  @default(now()) @map("created_at")
+  revokedAt DateTime? @map("revoked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notification_subscriptions")
+}

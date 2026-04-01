@@ -1,0 +1,36 @@
+{
+  "name": "convosapp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ConVos - planes reales con validación, gamificación y recuerdos.",
+  "scripts": {
+    "dev": "npm run dev -w web & npm run start:dev -w api",
+    "dev:web": "npm run dev -w web",
+    "dev:api": "npm run start:dev -w api",
+    "build": "npm run build -w web && npm run build -w api",
+    "lint": "npm run lint -w web && npm run lint -w api",
+    "format": "prettier -w .",
+    "db:up": "docker compose -f infra/docker-compose.yml up -d",
+    "db:down": "docker compose -f infra/docker-compose.yml down",
+    "db:migrate": "npm run db:migrate -w api",
+    "db:seed": "npm run db:seed -w api"
+  },
+  "workspaces": [
+    "apps/*"
+  ],
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.16",
+    "prettier": "^3.6.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/juanjosepenha4199/ConVosApp.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/juanjosepenha4199/ConVosApp/issues"
+  },
+  "homepage": "https://github.com/juanjosepenha4199/ConVosApp#readme"
+}

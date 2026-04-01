@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: convos
+      POSTGRES_PASSWORD: convos
+      POSTGRES_DB: convos
+    ports:
+      - "5432:5432"
+    volumes:
+      - convos_pg:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - convos_redis:/data
+
+volumes:
+  convos_pg:
+  convos_redis:
+

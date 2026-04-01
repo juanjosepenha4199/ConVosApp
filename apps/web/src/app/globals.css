@@ -1,0 +1,161 @@
+@import "tailwindcss";
+
+:root {
+  --background: #faf8ff;
+  --foreground: #334155;
+  --brand-from: #a78bfa;
+  --brand-mid: #67e8f9;
+  --brand-to: #f9a8d4;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Fondo claro con blobs suaves + movimiento */
+.convos-gradient {
+  background-color: #faf8ff;
+  background-image:
+    radial-gradient(900px circle at 15% 10%, rgba(167, 139, 250, 0.35), transparent 42%),
+    radial-gradient(800px circle at 85% 15%, rgba(103, 232, 249, 0.32), transparent 40%),
+    radial-gradient(700px circle at 50% 95%, rgba(249, 168, 212, 0.28), transparent 45%);
+  animation: convos-bg-shift 18s ease-in-out infinite alternate;
+}
+
+@keyframes convos-bg-shift {
+  0% {
+    background-position: 0% 0%, 100% 0%, 50% 100%;
+  }
+  100% {
+    background-position: 8% 4%, 92% 8%, 48% 96%;
+  }
+}
+
+.convos-brand {
+  background: linear-gradient(120deg, var(--brand-from), var(--brand-mid), var(--brand-to));
+  background-size: 200% 200%;
+  animation: convos-brand-shimmer 6s ease infinite;
+}
+
+@keyframes convos-brand-shimmer {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+/* Tarjetas interactivas */
+.convos-card {
+  @apply rounded-3xl border border-white/80 bg-white/85 shadow-sm backdrop-blur-md transition-all duration-300;
+  box-shadow: 0 4px 24px -4px rgba(139, 92, 246, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.8) inset;
+}
+
+.convos-card:hover {
+  transform: translateY(-4px) scale(1.01);
+  box-shadow: 0 20px 40px -12px rgba(139, 92, 246, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.9) inset;
+}
+
+.convos-btn-primary {
+  @apply inline-flex items-center justify-center rounded-full px-6 py-3 text-sm font-semibold text-white shadow-md transition-all duration-200 active:scale-[0.98];
+  background: linear-gradient(120deg, #a78bfa, #67e8f9, #f9a8d4);
+  background-size: 200% 200%;
+  animation: convos-brand-shimmer 8s ease infinite;
+}
+
+.convos-btn-primary:hover {
+  filter: brightness(1.05);
+  box-shadow: 0 12px 28px -8px rgba(167, 139, 250, 0.45);
+}
+
+.convos-btn-ghost {
+  @apply inline-flex items-center justify-center rounded-full border border-violet-200/80 bg-white/90 px-6 py-3 text-sm font-semibold text-violet-900 shadow-sm transition-all duration-200 hover:border-violet-300 hover:bg-white hover:shadow-md active:scale-[0.98];
+}
+
+.convos-input {
+  @apply h-11 w-full rounded-xl border border-violet-100 bg-white/90 px-3 text-sm outline-none transition-shadow focus:ring-4 focus:ring-violet-200/80;
+}
+
+.convos-label {
+  @apply grid gap-1 text-sm;
+}
+
+.convos-float {
+  animation: convos-float 5s ease-in-out infinite;
+}
+
+@keyframes convos-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+/* Stickers / micro-animaciones (respetar accesibilidad) */
+.convos-joy-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.45rem;
+}
+
+.convos-sticker-bounce {
+  animation: convos-sticker-bounce 2.4s ease-in-out infinite;
+}
+
+@keyframes convos-sticker-bounce {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2deg) scale(1);
+  }
+  50% {
+    transform: translateY(-7px) rotate(2deg) scale(1.06);
+  }
+}
+
+.convos-wiggle {
+  display: inline-block;
+  animation: convos-wiggle 2.8s ease-in-out infinite;
+}
+
+@keyframes convos-wiggle {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(6deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .convos-gradient,
+  .convos-brand,
+  .convos-btn-primary {
+    animation: none;
+  }
+
+  .convos-float,
+  .convos-sticker-bounce,
+  .convos-wiggle {
+    animation: none;
+  }
+}
