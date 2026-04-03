@@ -1,9 +1,16 @@
 /**
  * Por defecto `/api/v1`: misma origen que la web; Next reenvía a Nest (next.config rewrites).
- * Para llamar directo al backend: NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:4000/api/v1
+ * Producción: `https://tu-api.up.railway.app/api/v1` (si falta `https://`, se asume https).
  */
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '') || '/api/v1';
+function normalizeApiBaseUrl(raw: string | undefined): string {
+  if (!raw?.trim()) return '/api/v1';
+  let u = raw.replace(/\/$/, '').trim();
+  if (u.startsWith('/')) return u;
+  if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
+  return u;
+}
+
+const API_BASE_URL = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
 
 export type ApiError = {
   status: number;
