@@ -12,6 +12,12 @@ function normalizeApiBaseUrl(raw: string | undefined): string {
 
 const API_BASE_URL = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
 
+/**
+ * Origen solo para `/uploads/...` si usas `/api/v1` relativo en la web (proxy en Vercel).
+ * Ej.: `https://tu-api.up.railway.app` (sin `/api/v1`).
+ */
+const UPLOADS_ORIGIN = process.env.NEXT_PUBLIC_UPLOADS_ORIGIN?.replace(/\/$/, '').trim();
+
 export type ApiError = {
   status: number;
   message: string;
@@ -23,6 +29,11 @@ export function resolvePublicAssetUrl(href: string | null | undefined): string |
   const h = href.trim();
   if (h.startsWith('http://') || h.startsWith('https://')) return h;
   if (!h.startsWith('/')) return null;
+
+  if (UPLOADS_ORIGIN) {
+    return `${UPLOADS_ORIGIN}${h}`;
+  }
+
   if (API_BASE_URL.startsWith('/')) {
     if (typeof window === 'undefined') return h;
     return `${window.location.origin}${h}`;

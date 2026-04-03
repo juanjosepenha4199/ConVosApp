@@ -1085,16 +1085,10 @@ export default function GroupDetailPage() {
                   className="overflow-hidden rounded-2xl border border-violet-100 bg-white/70 shadow-sm ring-1 ring-violet-50"
                 >
                   <Link href={`/app/plans/${v.plan.id}`} className="block">
-                    <div className="relative aspect-square bg-slate-100">
+                    <div className="relative aspect-square overflow-hidden bg-slate-100">
                       {src ? (
-                        <Image
-                          src={src}
-                          alt=""
-                          fill
-                          className="object-cover"
-                          unoptimized
-                          sizes="(max-width:768px) 50vw, 25vw"
-                        />
+                        // eslint-disable-next-line @next/next/no-img-element -- URLs dinámicas (API / uploads)
+                        <img src={src} alt="" className="absolute inset-0 h-full w-full object-cover" />
                       ) : (
                         <div className="flex h-full items-center justify-center text-xs text-slate-500">Sin imagen</div>
                       )}

@@ -14,6 +14,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { mkdir, writeFile } from 'fs/promises';
 import * as path from 'path';
+import { UPLOADS_ABSOLUTE_DIR } from '../uploads-dir';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UsersService } from './users.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -59,7 +60,7 @@ export class UsersController {
 
     const userId = req.user.userId as string;
     const filename = `avatar_${userId.slice(0, 8)}_${Date.now()}${safeAvatarExt(mime)}`;
-    const outPath = path.join(process.cwd(), 'uploads', filename);
+    const outPath = path.join(UPLOADS_ABSOLUTE_DIR, filename);
     await mkdir(path.dirname(outPath), { recursive: true });
     await writeFile(outPath, file.buffer);
 

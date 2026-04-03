@@ -15,6 +15,7 @@ import { ValidationService } from './validation.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage, memoryStorage } from 'multer';
 import * as path from 'path';
+import { UPLOADS_ABSOLUTE_DIR } from '../uploads-dir';
 import { ValidationSubmitDto } from './dto/validation.dto';
 import { mkdir, writeFile } from 'fs/promises';
 
@@ -51,7 +52,7 @@ export class ValidationController {
     if (!file) throw new Error('file required');
 
     const filename = `photo_${Date.now()}${safeExt(file.mimetype)}`;
-    const outPath = path.join(process.cwd(), 'uploads', filename);
+    const outPath = path.join(UPLOADS_ABSOLUTE_DIR, filename);
     await mkdir(path.dirname(outPath), { recursive: true });
     await writeFile(outPath, file.buffer);
 

@@ -1,6 +1,5 @@
 'use client';
 
-import Image from 'next/image';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -303,16 +302,10 @@ export default function PlanDetailPage() {
                   key={v.id}
                   className="overflow-hidden rounded-2xl border border-violet-100 bg-white/70 shadow-sm ring-1 ring-violet-50"
                 >
-                  <div className="relative aspect-video bg-slate-100">
+                  <div className="relative aspect-video overflow-hidden bg-slate-100">
                     {src ? (
-                      <Image
-                        src={src}
-                        alt=""
-                        fill
-                        className="object-cover"
-                        unoptimized
-                        sizes="(max-width:768px) 100vw, 50vw"
-                      />
+                      // eslint-disable-next-line @next/next/no-img-element -- URLs dinámicas (API / uploads)
+                      <img src={src} alt="" className="absolute inset-0 h-full w-full object-cover" />
                     ) : (
                       <div className="flex h-full items-center justify-center text-xs text-slate-500">Sin imagen</div>
                     )}

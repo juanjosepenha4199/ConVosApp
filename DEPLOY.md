@@ -121,6 +121,7 @@ El despliegue que solo mostraba “ConVos API…” puedes **archivarlo o borrar
 - **Migraciones:** en local, con `DATABASE_URL` de Neon:  
   `cd apps/api && npx prisma migrate deploy --schema prisma/schema.prisma`
 - **Front “fail to fetch”:** comprueba `NEXT_PUBLIC_API_BASE_URL` (https, sin typo) y que la API responda en `/api/v1`.
+- **Fotos de validación en blanco / icono roto:** las URLs son `/uploads/...` en la API. En Vercel debe existir `NEXT_PUBLIC_API_BASE_URL=https://TU-RAILWAY.../api/v1` para que el front construya `https://TU-RAILWAY.../uploads/...`. Si usas solo `/api/v1` relativo, define además `NEXT_PUBLIC_UPLOADS_ORIGIN=https://TU-RAILWAY...` (sin `/api/v1`) y en el build de Vercel `API_PROXY_TARGET` apuntando al mismo host, para que el proxy de `/uploads` no caiga en `127.0.0.1`. **Nota:** en Railway el disco del contenedor suele ser **efímero**: cada redeploy puede borrar `uploads/`; las filas en base siguen apuntando a archivos que ya no existen (404). Para producción real hace falta **volumen persistente** en Railway o almacenamiento tipo S3.
 
 ---
 

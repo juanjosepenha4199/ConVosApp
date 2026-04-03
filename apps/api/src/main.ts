@@ -3,7 +3,7 @@ import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import * as express from 'express';
-import * as path from 'path';
+import { UPLOADS_ABSOLUTE_DIR } from './uploads-dir';
 import { GlobalHttpExceptionFilter } from './filters/http-exception.filter';
 
 function requireEnv(name: string) {
@@ -39,7 +39,7 @@ async function bootstrap() {
   );
 
   // Dev-friendly static serving for uploaded photos (use S3/CDN in prod)
-  app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+  app.use('/uploads', express.static(UPLOADS_ABSOLUTE_DIR));
 
   await app.listen(Number(process.env.PORT ?? 4000));
 }
