@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { api, uploadPublicUrl, type ProfileActivityResponse } from '@/lib/api';
+import { api, isAbortError, resolvePublicAssetUrl, uploadPublicUrl, type ProfileActivityResponse } from '@/lib/api';
 import { fetchMeWithRefresh, getAccessToken } from '@/lib/auth';
 import { useRouter } from 'next/navigation';
 
@@ -55,36 +55,94 @@ export default function ProfilePage() {
   const [data, setData] = useState<ProfileActivityResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [editName, setEditName] = useState('');
+  const [editBio, setEditBio] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
-  const load = useCallback(async () => {
-    const token = getAccessToken();
-    if (!token) {
-      router.replace('/auth/login');
-      return;
-    }
-    setError(null);
-    try {
-      const act = await api.meActivity(token);
-      setData(act);
-    } catch (e: unknown) {
-      const msg =
-        e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo cargar el perfil';
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  }, [router]);
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      const token = getAccessToken();
+      if (!token) {
+        router.replace('/auth/login');
+        return;
+      }
+      setError(null);
+      try {
+        const act = await api.meActivity(token, signal);
+        setData(act);
+        setEditName(act.user.name ?? '');
+        setEditBio(act.user.bio ?? '');
+      } catch (e: unknown) {
+        if (isAbortError(e)) return;
+        const msg =
+          e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo cargar el perfil';
+        setError(msg);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [router],
+  );
 
   useEffect(() => {
+    let cancelled = false;
+    const ac = new AbortController();
     (async () => {
       const me = await fetchMeWithRefresh();
+      if (cancelled) return;
       if (!me) {
         router.replace('/auth/login');
         return;
       }
-      await load();
+      await load(ac.signal);
     })();
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
   }, [load, router]);
+
+  async function saveProfile(e: React.FormEvent) {
+    e.preventDefault();
+    const token = getAccessToken();
+    if (!token) return;
+    setSavingProfile(true);
+    setError(null);
+    try {
+      const updated = await api.updateProfile(token, {
+        name: editName.trim(),
+        bio: editBio.trim(),
+      });
+      setData((prev) => (prev ? { ...prev, user: updated } : prev));
+    } catch (err: unknown) {
+      const msg =
+        err && typeof err === 'object' && 'message' in err ? String((err as { message: string }).message) : 'No se pudo guardar';
+      setError(msg);
+    } finally {
+      setSavingProfile(false);
+    }
+  }
+
+  async function onAvatarPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const token = getAccessToken();
+    if (!token) return;
+    setUploadingAvatar(true);
+    setError(null);
+    try {
+      const updated = await api.uploadAvatar(token, file);
+      setData((prev) => (prev ? { ...prev, user: updated } : prev));
+    } catch (err: unknown) {
+      const msg =
+        err && typeof err === 'object' && 'message' in err ? String((err as { message: string }).message) : 'No se pudo subir la foto';
+      setError(msg);
+    } finally {
+      setUploadingAvatar(false);
+    }
+  }
 
   return (
     <div className="convos-gradient mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-5 py-6">
@@ -106,11 +164,74 @@ export default function ProfilePage() {
       ) : data ? (
         <>
           <section className="convos-card p-6">
+            <h2 className="text-sm font-bold text-slate-800">Foto y datos</h2>
+            <p className="mt-1 text-xs text-slate-600">
+              Tu foto y biografía los ven quienes comparten grupo contigo.
+            </p>
+            <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start">
+              <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-2xl border border-violet-100 bg-violet-50/80 ring-2 ring-white shadow-sm">
+                {resolvePublicAssetUrl(data.user.avatarUrl) ? (
+                  <Image
+                    src={resolvePublicAssetUrl(data.user.avatarUrl)!}
+                    alt=""
+                    fill
+                    className="object-cover"
+                    unoptimized
+                    sizes="112px"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-3xl text-violet-300">👤</div>
+                )}
+              </div>
+              <div className="min-w-0 flex-1 space-y-3">
+                <label className="block">
+                  <span className="convos-label mb-1 block text-xs font-medium text-slate-600">Cambiar foto</span>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    className="block w-full max-w-xs text-sm text-slate-600 file:mr-3 file:rounded-xl file:border-0 file:bg-violet-100 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-violet-900 hover:file:bg-violet-200"
+                    disabled={uploadingAvatar}
+                    onChange={(ev) => void onAvatarPick(ev)}
+                  />
+                </label>
+                {uploadingAvatar ? <p className="text-xs text-violet-700">Subiendo imagen…</p> : null}
+              </div>
+            </div>
+            <form className="mt-6 space-y-4 border-t border-violet-100/80 pt-6" onSubmit={saveProfile}>
+              <label className="convos-label block">
+                <span className="font-medium text-slate-700">Nombre visible</span>
+                <input
+                  className="convos-input mt-1"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder={data.user.email}
+                  maxLength={80}
+                />
+              </label>
+              <label className="convos-label block">
+                <span className="font-medium text-slate-700">Biografía</span>
+                <textarea
+                  className="convos-input mt-1 min-h-[100px] resize-y"
+                  value={editBio}
+                  onChange={(e) => setEditBio(e.target.value)}
+                  placeholder="Una línea sobre ti…"
+                  maxLength={500}
+                  rows={4}
+                />
+                <span className="mt-1 block text-right text-xs text-slate-400">{editBio.length}/500</span>
+              </label>
+              <button type="submit" className="convos-btn-primary h-10 px-5 text-sm disabled:opacity-60" disabled={savingProfile}>
+                {savingProfile ? 'Guardando…' : 'Guardar perfil'}
+              </button>
+            </form>
+          </section>
+
+          <section className="convos-card p-6">
             <h2 className="text-sm font-bold text-slate-800">Resumen</h2>
             <div className="mt-3 flex flex-wrap gap-4 text-sm">
               <div>
-                <div className="text-slate-500">Nombre</div>
-                <div className="font-semibold text-slate-800">{data.user.name ?? data.user.email}</div>
+                <div className="text-slate-500">Correo</div>
+                <div className="font-semibold text-slate-800">{data.user.email}</div>
               </div>
               <div>
                 <div className="text-slate-500">Nivel</div>

@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   UseGuards,
   Request,
 } from '@nestjs/common';
@@ -34,6 +35,24 @@ export class GroupsController {
   async getGroup(@Request() req: any, @Param('groupId') groupId: string) {
     await this.groups.requireMember(groupId, req.user.userId);
     return this.groups.getGroupOrThrow(groupId);
+  }
+
+  @Get('groups/:groupId/members')
+  listMembers(@Request() req: any, @Param('groupId') groupId: string) {
+    return this.groups.listMembers(groupId, req.user.userId);
+  }
+
+  @Get('groups/:groupId/validation-photos')
+  validationPhotos(
+    @Request() req: any,
+    @Param('groupId') groupId: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.groups.listValidationGallery(
+      groupId,
+      req.user.userId,
+      limit ? Number(limit) : undefined,
+    );
   }
 
   @Post('groups/:groupId/invites')

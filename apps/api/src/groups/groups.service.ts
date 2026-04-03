@@ -126,4 +126,48 @@ export class GroupsService {
 
     return { groupId: invite.groupId };
   }
+
+  async listMembers(groupId: string, requesterId: string) {
+    await this.requireMember(groupId, requesterId);
+    const rows = await this.prisma.groupMember.findMany({
+      where: { groupId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            bio: true,
+            avatarUrl: true,
+          },
+        },
+      },
+      orderBy: { joinedAt: 'asc' },
+    });
+    return rows.map((m) => ({
+      userId: m.userId,
+      role: m.role,
+      joinedAt: m.joinedAt,
+      user: m.user,
+    }));
+  }
+
+  /** Fotos de validación de todos los miembros (mismo grupo). */
+  async listValidationGallery(groupId: string, userId: string, limit = 24) {
+    await this.requireMember(groupId, userId);
+    const take = Math.min(Math.max(Number(limit) || 24, 1), 80);
+    return this.prisma.planValidation.findMany({
+      where: {
+        plan: { groupId },
+        photo: { publicUrl: { not: null } },
+      },
+      orderBy: { submittedAtServer: 'desc' },
+      take,
+      include: {
+        photo: { select: { publicUrl: true } },
+        user: { select: { id: true, name: true, email: true, avatarUrl: true } },
+        plan: { select: { id: true, title: true } },
+      },
+    });
+  }
 }

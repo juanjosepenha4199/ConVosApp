@@ -22,6 +22,8 @@ import { FeedController } from './feed/feed.controller';
 import { FeedService } from './feed/feed.service';
 import { ArenaController } from './arena/arena.controller';
 import { ArenaService } from './arena/arena.service';
+import { PlanSuggestionsController } from './plan-suggestions/plan-suggestions.controller';
+import { PlanSuggestionsService } from './plan-suggestions/plan-suggestions.service';
 
 @Module({
   imports: [
@@ -44,6 +46,7 @@ import { ArenaService } from './arena/arena.service';
     NotificationsController,
     FeedController,
     ArenaController,
+    PlanSuggestionsController,
   ],
   providers: [
     AppService,
@@ -54,6 +57,7 @@ import { ArenaService } from './arena/arena.service';
     GamificationService,
     FeedService,
     ArenaService,
+    PlanSuggestionsService,
   ],
 })
 export class AppModule {}

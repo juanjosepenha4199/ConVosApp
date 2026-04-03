@@ -283,6 +283,12 @@ export class ValidationService {
     return this.prisma.planValidation.findMany({
       where: { planId, plan: { group: { members: { some: { userId } } } } },
       orderBy: { submittedAtServer: 'desc' },
+      include: {
+        photo: { select: { id: true, publicUrl: true } },
+        user: {
+          select: { id: true, name: true, email: true, avatarUrl: true },
+        },
+      },
     });
   }
 }

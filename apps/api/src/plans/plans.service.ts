@@ -9,7 +9,7 @@ import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { GroupsService } from '../groups/groups.service';
 import { Decimal } from '@prisma/client/runtime/library';
-import { PlanStatus } from '@prisma/client';
+import { GroupRole, PlanStatus } from '@prisma/client';
 import { nanoid } from 'nanoid';
 
 type PlaceInput = {
@@ -144,11 +144,26 @@ export class PlansService {
   async getPlan(planId: string, userId: string) {
     const plan = await this.prisma.plan.findUnique({
       where: { id: planId },
-      include: { place: true, participants: true, validations: true },
+      include: {
+        place: true,
+        participants: true,
+        validations: {
+          orderBy: { submittedAtServer: 'desc' },
+          include: {
+            photo: { select: { id: true, publicUrl: true } },
+            user: {
+              select: { id: true, name: true, email: true, avatarUrl: true },
+            },
+          },
+        },
+      },
     });
     if (!plan) throw new NotFoundException('PLAN_NOT_FOUND');
-    await this.groups.requireMember(plan.groupId, userId);
-    return plan;
+    const member = await this.groups.requireMember(plan.groupId, userId);
+    const canEdit =
+      plan.status === PlanStatus.scheduled &&
+      (plan.createdBy === userId || member.role === GroupRole.admin);
+    return { ...plan, canEdit };
   }
 
   private async canEdit(planId: string, userId: string) {
@@ -167,10 +182,12 @@ export class PlansService {
       throw new ForbiddenException('PLAN_NOT_EDITABLE');
 
     const data: any = {};
-    if (patch.title) data.title = patch.title;
-    if (patch.type) data.type = patch.type;
-    if (patch.scheduledAt) data.scheduledAt = patch.scheduledAt;
-    if (patch.locationRadiusM) data.locationRadiusM = patch.locationRadiusM;
+    if (patch.title !== undefined) data.title = patch.title;
+    if (patch.type !== undefined) data.type = patch.type;
+    if (patch.scheduledAt !== undefined)
+      data.scheduledAt = new Date(patch.scheduledAt);
+    if (patch.locationRadiusM !== undefined)
+      data.locationRadiusM = patch.locationRadiusM;
     if (typeof patch.requiresAllConfirm === 'boolean')
       data.requiresAllConfirm = patch.requiresAllConfirm;
     if (patch.place) {
@@ -178,11 +195,28 @@ export class PlansService {
       data.placeId = place.id;
     }
 
-    return this.prisma.plan.update({
+    const updated = await this.prisma.plan.update({
       where: { id: planId },
       data,
-      include: { place: true, participants: true },
+      include: {
+        place: true,
+        participants: true,
+        validations: {
+          orderBy: { submittedAtServer: 'desc' },
+          include: {
+            photo: { select: { id: true, publicUrl: true } },
+            user: {
+              select: { id: true, name: true, email: true, avatarUrl: true },
+            },
+          },
+        },
+      },
     });
+    const memberAfter = await this.groups.requireMember(updated.groupId, userId);
+    const canEdit =
+      updated.status === PlanStatus.scheduled &&
+      (updated.createdBy === userId || memberAfter.role === GroupRole.admin);
+    return { ...updated, canEdit };
   }
 
   async cancelPlan(planId: string, userId: string, reason?: string) {

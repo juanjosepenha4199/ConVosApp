@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConvosJoy } from '@/components/ConvosJoy';
 import { fetchMeWithRefresh, clearTokens, getAccessToken } from '@/lib/auth';
-import { api, type ArenaLeaderboardRow, type ArenaMyRow, type GroupType } from '@/lib/api';
+import { api, isAbortError, type ArenaLeaderboardRow, type ArenaMyRow, type GroupType } from '@/lib/api';
 
 const GROUP_TYPES: { value: GroupType; label: string }[] = [
   { value: 'friends', label: 'Amigos' },
@@ -43,6 +43,8 @@ export default function DashboardPage() {
   const [arenaLoading, setArenaLoading] = useState(false);
   const [arenaError, setArenaError] = useState<string | null>(null);
 
+  const sessionReady = useRef(false);
+
   const loadGroups = useCallback(async () => {
     const token = getAccessToken();
     if (!token) {
@@ -55,6 +57,7 @@ export default function DashboardPage() {
       const list = await api.groups.list(token);
       setGroups(list);
     } catch (e: unknown) {
+      if (isAbortError(e)) return;
       const msg = e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'Error al cargar grupos';
       setGroupsError(msg);
     } finally {
@@ -63,36 +66,72 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    const ac = new AbortController();
+    const { signal } = ac;
+
     (async () => {
       try {
-        const user = await fetchMeWithRefresh();
-        setMe(user);
-        if (user) {
-          await loadGroups();
+        if (!sessionReady.current) {
+          const user = await fetchMeWithRefresh();
+          if (cancelled) return;
+          setMe(user);
+          setLoading(false);
+          if (!user) return;
+          sessionReady.current = true;
+
           const token = getAccessToken();
-          if (token) {
-            setArenaLoading(true);
-            try {
-              const [lb, mine] = await Promise.all([
-                api.arena.leaderboard(token, { type: arenaType, range: '7d', limit: 10 }),
-                api.arena.me(token, { type: arenaType, range: '7d' }),
-              ]);
-              setArena(lb);
-              setArenaMe(mine);
-            } catch (e: unknown) {
-              setArenaError(
-                e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'Error al cargar arena',
-              );
-            } finally {
-              setArenaLoading(false);
-            }
+          if (!token) return;
+
+          setGroupsLoading(true);
+          setGroupsError(null);
+          try {
+            const list = await api.groups.list(token, signal);
+            if (!cancelled) setGroups(list);
+          } catch (e: unknown) {
+            if (isAbortError(e)) return;
+            const msg =
+              e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'Error al cargar grupos';
+            if (!cancelled) setGroupsError(msg);
+          } finally {
+            if (!cancelled) setGroupsLoading(false);
           }
         }
-      } finally {
-        setLoading(false);
+
+        const token = getAccessToken();
+        if (!token) return;
+
+        setArenaLoading(true);
+        setArenaError(null);
+        try {
+          const [lb, mine] = await Promise.all([
+            api.arena.leaderboard(token, { type: arenaType, range: '7d', limit: 10, signal }),
+            api.arena.me(token, { type: arenaType, range: '7d', signal }),
+          ]);
+          if (!cancelled) {
+            setArena(lb);
+            setArenaMe(mine);
+          }
+        } catch (e: unknown) {
+          if (isAbortError(e)) return;
+          if (!cancelled) {
+            setArenaError(
+              e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'Error al cargar arena',
+            );
+          }
+        } finally {
+          if (!cancelled) setArenaLoading(false);
+        }
+      } catch {
+        if (!cancelled) setLoading(false);
       }
     })();
-  }, [arenaType, loadGroups]);
+
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
+  }, [arenaType]);
 
   async function createGroup(e: React.FormEvent) {
     e.preventDefault();

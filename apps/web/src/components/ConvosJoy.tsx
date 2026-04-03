@@ -25,23 +25,14 @@ export function ConvosJoy({ className = '', size = 'md' }: ConvosJoyProps) {
   );
 }
 
-/** GIF decorativo pequeño (Giphy); alt vacío porque es puramente ornamental. */
+/** Bloque decorativo ligero (sin red externa) para no competir con las peticiones de la API. */
 export function ConvosPartyGif({ className = '' }: { className?: string }) {
   return (
     <div
-      className={`relative overflow-hidden rounded-2xl ring-2 ring-white/90 shadow-lg ${className}`}
+      className={`relative flex h-28 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-fuchsia-200/90 via-violet-100 to-cyan-100 ring-2 ring-white/90 shadow-lg sm:h-32 ${className}`}
       aria-hidden
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src="https://media.giphy.com/media/26u4cqiYI30juCOGY/giphy.gif"
-        alt=""
-        width={160}
-        height={120}
-        className="h-28 w-full object-cover sm:h-32"
-        loading="lazy"
-        decoding="async"
-      />
+      <span className="text-4xl sm:text-5xl">🎉</span>
     </div>
   );
 }

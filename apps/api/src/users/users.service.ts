@@ -111,12 +111,51 @@ export class UsersService {
         id: true,
         email: true,
         name: true,
+        bio: true,
         avatarUrl: true,
         level: true,
         totalPoints: true,
       },
     });
     return user!;
+  }
+
+  async updateProfile(
+    userId: string,
+    data: { name?: string; bio?: string | null },
+  ) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(data.name !== undefined ? { name: data.name || null } : {}),
+        ...(data.bio !== undefined ? { bio: data.bio?.trim() ? data.bio.trim() : null } : {}),
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        bio: true,
+        avatarUrl: true,
+        level: true,
+        totalPoints: true,
+      },
+    });
+  }
+
+  async setAvatarUrl(userId: string, publicUrl: string) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { avatarUrl: publicUrl },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        bio: true,
+        avatarUrl: true,
+        level: true,
+        totalPoints: true,
+      },
+    });
   }
 
   async getProfileActivity(userId: string) {

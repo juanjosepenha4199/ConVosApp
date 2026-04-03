@@ -80,6 +80,7 @@ model User {
   email        String   @unique
   passwordHash String?  @map("password_hash")
   name         String?
+  bio          String?  @db.VarChar(500)
   avatarUrl    String?  @map("avatar_url")
   googleSub    String?  @unique @map("google_sub")
   level        Int      @default(1)
@@ -100,6 +101,7 @@ model User {
   pushSubs             NotificationSubscription[]
   invites              GroupInvite[]              @relation("InviteCreatedBy")
   challengeAssignments ChallengeAssignment[]
+  planSuggestions      PlanSuggestion[]
 
   @@map("users")
 }
@@ -131,6 +133,7 @@ model Group {
   members              GroupMember[]
   invites              GroupInvite[]
   plans                Plan[]
+  planSuggestions      PlanSuggestion[]
   points               PointsLedger[]
   feed                 FeedItem[]
   challengeAssignments ChallengeAssignment[]
@@ -212,6 +215,24 @@ model Plan {
   @@index([groupId])
   @@index([scheduledAt])
   @@map("plans")
+}
+
+/** Idea de plan sin fecha: el grupo propone; luego se agenda y se crea un Plan real. */
+model PlanSuggestion {
+  id        String   @id @default(uuid())
+  groupId   String   @map("group_id")
+  createdBy String   @map("created_by")
+  title     String
+  type      PlanType
+  note      String?  @db.VarChar(500)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  group   Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  creator User  @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([groupId])
+  @@map("plan_suggestions")
 }
 
 model PlanParticipant {

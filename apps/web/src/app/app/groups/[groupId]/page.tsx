@@ -1,10 +1,20 @@
 'use client';
 
+import Image from 'next/image';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ConvosPartyGif } from '@/components/ConvosJoy';
-import { api, type FeedItem, type PlanType } from '@/lib/api';
+import {
+  api,
+  isAbortError,
+  resolvePublicAssetUrl,
+  type FeedItem,
+  type GroupMemberRow,
+  type GroupValidationPhotoRow,
+  type PlanSuggestionRow,
+  type PlanType,
+} from '@/lib/api';
 import { fetchMeWithRefresh, getAccessToken } from '@/lib/auth';
 
 const PLAN_TYPES: { value: PlanType; label: string }[] = [
@@ -16,14 +26,17 @@ const PLAN_TYPES: { value: PlanType; label: string }[] = [
   { value: 'other', label: 'Otro' },
 ];
 
-const TITLE_SUGGESTIONS: Record<PlanType, string[]> = {
-  food: ['Cenita rica', 'Brunch', 'Helado + charla', 'Comida sorpresa'],
-  date: ['Cita tranquila', 'Noche de peli', 'Atardecer juntos', 'Café + paseo'],
-  hangout: ['Plan tranqui', 'Salir a hablar', 'Tarde de juegos', 'Desconexión'],
-  sport: ['Caminata', 'Gym juntos', 'Bici', 'Partidito'],
-  trip: ['Plan de domingo', 'Escapadita', 'Mirador', 'Picnic'],
-  other: ['Plan especial', 'Momento lindo', 'Algo espontáneo', 'Mini aventura'],
-};
+/** Sugerencias genéricas: el tipo de plan solo categoriza; no se enlaza al título. */
+const PLAN_TITLE_HINTS = [
+  'Cenita rica',
+  'Café y charla',
+  'Parque o paseo',
+  'Noche de pelis',
+  'Plan sorpresa',
+  'Mini aventura',
+  'Quedada tranqui',
+  'Salida espontánea',
+];
 
 const PLACE_SUGGESTIONS: string[] = [
   'Parque',
@@ -114,7 +127,10 @@ function formatFeedLine(item: FeedItem): { title: string; sub?: string } {
   if (item.type === 'plan_validated') {
     const planTitle = item.plan?.title ?? (payload.title as string) ?? 'un plan';
     const placeName = payload.placeName as string | undefined;
-    return { title: `${actor} validó «${planTitle}»`, sub: placeName };
+    return {
+      title: `Validación en «${planTitle}»`,
+      sub: `Validado por ${actor}${placeName ? ` · ${placeName}` : ''}`,
+    };
   }
   if (item.type === 'mission_completed') {
     const t = typeof payload.title === 'string' ? payload.title : undefined;
@@ -140,6 +156,26 @@ export default function GroupDetailPage() {
   const [leaderboard, setLeaderboard] = useState<Awaited<ReturnType<typeof api.groups.leaderboard>> | null>(null);
   const [challenges, setChallenges] = useState<unknown[] | null>(null);
   const [feed, setFeed] = useState<FeedItem[] | null>(null);
+  const [members, setMembers] = useState<GroupMemberRow[] | null>(null);
+  const [validationPhotos, setValidationPhotos] = useState<GroupValidationPhotoRow[] | null>(null);
+  const [suggestions, setSuggestions] = useState<PlanSuggestionRow[] | null>(null);
+  const [backlogTitle, setBacklogTitle] = useState('');
+  const [backlogType, setBacklogType] = useState<PlanType>('food');
+  const [backlogNote, setBacklogNote] = useState('');
+  const [backlogSaving, setBacklogSaving] = useState(false);
+  const [schedulingSuggestionId, setSchedulingSuggestionId] = useState<string | null>(null);
+  const [schLocal, setSchLocal] = useState('');
+  const [schPlace, setSchPlace] = useState('');
+  const [schAddr, setSchAddr] = useState('');
+  const [schLat, setSchLat] = useState('');
+  const [schLng, setSchLng] = useState('');
+  const [schRadius, setSchRadius] = useState('250');
+  const [schedulingBusy, setSchedulingBusy] = useState(false);
+  const [editingSuggestion, setEditingSuggestion] = useState<PlanSuggestionRow | null>(null);
+  const [editSugTitle, setEditSugTitle] = useState('');
+  const [editSugType, setEditSugType] = useState<PlanType>('food');
+  const [editSugNote, setEditSugNote] = useState('');
+  const [editSugSaving, setEditSugSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showPlanForm, setShowPlanForm] = useState(false);
@@ -165,45 +201,63 @@ export default function GroupDetailPage() {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }, []);
 
-  const load = useCallback(async () => {
-    const t = getAccessToken();
-    if (!t) {
-      router.replace('/auth/login');
-      return;
-    }
-    setToken(t);
-    setError(null);
-    try {
-      const g = await api.groups.get(t, groupId);
-      setGroupName(g.name);
-      const [pl, lb, ch, fd] = await Promise.all([
-        api.plans.listByGroup(t, groupId),
-        api.groups.leaderboard(t, groupId).catch(() => []),
-        api.groups.activeChallenges(t, groupId).catch(() => []),
-        api.groups.feed(t, groupId).catch(() => []),
-      ]);
-      setPlans(pl);
-      setLeaderboard(lb);
-      setChallenges(ch);
-      setFeed(fd);
-    } catch (e: unknown) {
-      const msg =
-        e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo cargar el grupo';
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  }, [groupId, router]);
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      const t = getAccessToken();
+      if (!t) {
+        router.replace('/auth/login');
+        return;
+      }
+      setLoading(true);
+      setToken(t);
+      setError(null);
+      try {
+        const [g, pl, lb, ch, fd, mem, vph, sug] = await Promise.all([
+          api.groups.get(t, groupId, signal),
+          api.plans.listByGroup(t, groupId, signal),
+          api.groups.leaderboard(t, groupId, undefined, signal).catch(() => []),
+          api.groups.activeChallenges(t, groupId, signal).catch(() => []),
+          api.groups.feed(t, groupId, { signal }).catch(() => []),
+          api.groups.members(t, groupId, signal).catch(() => []),
+          api.groups.validationPhotos(t, groupId, 30, signal).catch(() => []),
+          api.planSuggestions.list(t, groupId, signal).catch(() => []),
+        ]);
+        setGroupName(g.name);
+        setPlans(pl);
+        setLeaderboard(lb);
+        setChallenges(ch);
+        setFeed(fd);
+        setMembers(mem);
+        setValidationPhotos(vph);
+        setSuggestions(sug);
+      } catch (e: unknown) {
+        if (isAbortError(e)) return;
+        const msg =
+          e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo cargar el grupo';
+        setError(msg);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [groupId, router],
+  );
 
   useEffect(() => {
+    let cancelled = false;
+    const ac = new AbortController();
     (async () => {
       const me = await fetchMeWithRefresh();
+      if (cancelled) return;
       if (!me) {
         router.replace('/auth/login');
         return;
       }
-      await load();
+      await load(ac.signal);
     })();
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
   }, [load, router]);
 
   useEffect(() => {
@@ -257,6 +311,31 @@ export default function GroupDetailPage() {
       writeCachedCoords(la, ln);
     } catch {
       setError('No se pudo obtener tu ubicación. Activa permisos/GPS e inténtalo de nuevo.');
+    }
+  }
+
+  async function fillScheduleLocation() {
+    try {
+      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 12000,
+          maximumAge: 0,
+        });
+      });
+      const la = String(pos.coords.latitude);
+      const ln = String(pos.coords.longitude);
+      setSchLat(la);
+      setSchLng(ln);
+      writeCachedCoords(la, ln);
+    } catch {
+      const c = readCachedCoords();
+      if (c) {
+        setSchLat(c.lat);
+        setSchLng(c.lng);
+        return;
+      }
+      setError('No se pudo obtener tu ubicación. Activa permisos/GPS o escribe lat/lng a mano.');
     }
   }
 
@@ -333,6 +412,113 @@ export default function GroupDetailPage() {
     }
   }
 
+  async function submitBacklog(e: React.FormEvent) {
+    e.preventDefault();
+    if (!token || !backlogTitle.trim()) return;
+    setBacklogSaving(true);
+    setError(null);
+    try {
+      await api.planSuggestions.create(token, groupId, {
+        title: backlogTitle.trim(),
+        type: backlogType,
+        note: backlogNote.trim() || undefined,
+      });
+      setBacklogTitle('');
+      setBacklogNote('');
+      await load();
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo guardar la idea';
+      setError(msg);
+    } finally {
+      setBacklogSaving(false);
+    }
+  }
+
+  function openSchedule(s: PlanSuggestionRow) {
+    setSchedulingSuggestionId(s.id);
+    setSchLocal(defaultSchedule);
+    setSchPlace('');
+    setSchAddr('');
+    setSchLat('');
+    setSchLng('');
+    setSchRadius('250');
+    setError(null);
+  }
+
+  async function submitScheduleForm(e: React.FormEvent) {
+    e.preventDefault();
+    if (!token || !schedulingSuggestionId) return;
+    if (!schPlace.trim() || !schLat.trim() || !schLng.trim()) return;
+    setSchedulingBusy(true);
+    setError(null);
+    try {
+      const out = await api.planSuggestions.schedule(token, groupId, schedulingSuggestionId, {
+        scheduledAt: new Date(schLocal).toISOString(),
+        place: {
+          name: schPlace.trim(),
+          address: schAddr.trim() || schPlace.trim(),
+          lat: schLat.trim(),
+          lng: schLng.trim(),
+        },
+        locationRadiusM: Math.min(5000, Math.max(50, Number(schRadius) || 250)),
+      });
+      setSchedulingSuggestionId(null);
+      await load();
+      router.push(`/app/plans/${out.planId}`);
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo crear el plan';
+      setError(msg);
+    } finally {
+      setSchedulingBusy(false);
+    }
+  }
+
+  async function removeSuggestion(id: string) {
+    if (!token || !window.confirm('¿Quitar esta idea de la lista?')) return;
+    setError(null);
+    try {
+      await api.planSuggestions.remove(token, groupId, id);
+      if (schedulingSuggestionId === id) setSchedulingSuggestionId(null);
+      if (editingSuggestion?.id === id) setEditingSuggestion(null);
+      await load();
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo eliminar';
+      setError(msg);
+    }
+  }
+
+  function startEditSug(s: PlanSuggestionRow) {
+    setEditingSuggestion(s);
+    setEditSugTitle(s.title);
+    setEditSugType(s.type);
+    setEditSugNote(s.note ?? '');
+  }
+
+  async function saveEditSug(e: React.FormEvent) {
+    e.preventDefault();
+    if (!token || !editingSuggestion || !editSugTitle.trim()) return;
+    setEditSugSaving(true);
+    setError(null);
+    try {
+      await api.planSuggestions.update(token, groupId, editingSuggestion.id, {
+        title: editSugTitle.trim(),
+        type: editSugType,
+        note: editSugNote.trim() || null,
+      });
+      setEditingSuggestion(null);
+      await load();
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo guardar';
+      setError(msg);
+    } finally {
+      setEditSugSaving(false);
+    }
+  }
+
   return (
     <div className="convos-gradient mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-5 py-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -355,6 +541,196 @@ export default function GroupDetailPage() {
         <section className="convos-card p-6 lg:col-span-2">
           <h2 className="text-sm font-bold text-slate-800">Planes</h2>
           <p className="mt-1 text-sm text-slate-600">Toca un plan para ver detalle y validar con foto + GPS.</p>
+
+          <div className="mt-5 rounded-2xl border border-amber-200/80 bg-gradient-to-br from-amber-50/90 via-white/70 to-orange-50/50 p-4 ring-1 ring-amber-100/70">
+            <h3 className="text-sm font-bold text-amber-950">Planeados pero sin fecha</h3>
+            <p className="mt-1 text-xs text-amber-900/80">
+              Propuestas del grupo sin día ni lugar obligatorio. Cuando quieras llevarlas a cabo, agenda fecha y ubicación y se
+              creará el plan.
+            </p>
+            {suggestions === null ? (
+              <p className="mt-2 text-sm text-amber-900/70">Cargando…</p>
+            ) : suggestions.length === 0 ? (
+              <p className="mt-2 text-sm text-amber-900/70">Aún no hay ideas. Añade la primera abajo.</p>
+            ) : (
+              <ul className="mt-3 space-y-2">
+                {suggestions.map((s) => (
+                  <li
+                    key={s.id}
+                    className="rounded-xl border border-amber-100/90 bg-white/80 px-3 py-2 text-sm shadow-sm ring-1 ring-white/80"
+                  >
+                    {editingSuggestion?.id === s.id ? (
+                      <form className="grid gap-2" onSubmit={saveEditSug}>
+                        <input
+                          className="convos-input text-sm"
+                          value={editSugTitle}
+                          onChange={(e) => setEditSugTitle(e.target.value)}
+                          required
+                        />
+                        <select
+                          className="convos-input text-sm"
+                          value={editSugType}
+                          onChange={(e) => setEditSugType(e.target.value as PlanType)}
+                        >
+                          {PLAN_TYPES.map((p) => (
+                            <option key={p.value} value={p.value}>
+                              {p.label}
+                            </option>
+                          ))}
+                        </select>
+                        <textarea
+                          className="convos-input min-h-[60px] text-sm"
+                          value={editSugNote}
+                          onChange={(e) => setEditSugNote(e.target.value)}
+                          placeholder="Nota opcional"
+                          rows={2}
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <button type="submit" className="convos-btn-primary h-9 px-4 text-xs" disabled={editSugSaving}>
+                            {editSugSaving ? '…' : 'Guardar'}
+                          </button>
+                          <button type="button" className="convos-btn-ghost h-9 px-4 text-xs" onClick={() => setEditingSuggestion(null)}>
+                            Cancelar
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <>
+                        <div className="font-semibold text-slate-800">{s.title}</div>
+                        <div className="text-xs text-slate-500">
+                          {PLAN_TYPES.find((p) => p.value === s.type)?.label ?? s.type} · Propuesta de{' '}
+                          {s.creator.name?.trim() || s.creator.email.split('@')[0]}
+                        </div>
+                        {s.note?.trim() ? <p className="mt-1 text-xs text-slate-600">{s.note}</p> : null}
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="rounded-full bg-violet-600 px-3 py-1 text-xs font-semibold text-white hover:bg-violet-700"
+                            onClick={() => openSchedule(s)}
+                          >
+                            Agendar con fecha
+                          </button>
+                          <button
+                            type="button"
+                            className="convos-btn-ghost px-3 py-1 text-xs"
+                            onClick={() => startEditSug(s)}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            className="text-xs font-semibold text-red-600 hover:underline"
+                            onClick={() => void removeSuggestion(s.id)}
+                          >
+                            Quitar
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {schedulingSuggestionId ? (
+              <form
+                className="mt-4 grid gap-2 rounded-xl border border-violet-200 bg-violet-50/50 p-3"
+                onSubmit={submitScheduleForm}
+              >
+                <div className="text-xs font-bold text-violet-900">Agendar esta idea</div>
+                <label className="convos-label text-xs">
+                  <span>Fecha y hora</span>
+                  <input
+                    className="convos-input mt-0.5"
+                    type="datetime-local"
+                    value={schLocal}
+                    onChange={(e) => setSchLocal(e.target.value)}
+                    required
+                  />
+                </label>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="convos-label text-xs">
+                    <span>Lugar (nombre)</span>
+                    <input className="convos-input mt-0.5" value={schPlace} onChange={(e) => setSchPlace(e.target.value)} required />
+                  </label>
+                  <label className="convos-label text-xs">
+                    <span>Dirección</span>
+                    <input className="convos-input mt-0.5" value={schAddr} onChange={(e) => setSchAddr(e.target.value)} />
+                  </label>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <label className="convos-label text-xs">
+                    <span>Lat</span>
+                    <input className="convos-input mt-0.5 font-mono" value={schLat} onChange={(e) => setSchLat(e.target.value)} required />
+                  </label>
+                  <label className="convos-label text-xs">
+                    <span>Lng</span>
+                    <input className="convos-input mt-0.5 font-mono" value={schLng} onChange={(e) => setSchLng(e.target.value)} required />
+                  </label>
+                  <label className="convos-label text-xs">
+                    <span>Radio (m)</span>
+                    <input className="convos-input mt-0.5" value={schRadius} onChange={(e) => setSchRadius(e.target.value)} />
+                  </label>
+                </div>
+                <button type="button" className="convos-btn-ghost h-8 w-fit px-3 text-xs" onClick={() => void fillScheduleLocation()}>
+                  Usar mi ubicación
+                </button>
+                <p className="text-[10px] text-slate-500">
+                  Si falla el GPS, se intentan usar las últimas coordenadas guardadas en este dispositivo.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button type="submit" className="convos-btn-primary h-9 px-4 text-xs" disabled={schedulingBusy}>
+                    {schedulingBusy ? 'Creando plan…' : 'Crear plan y abrir'}
+                  </button>
+                  <button type="button" className="convos-btn-ghost h-9 px-4 text-xs" onClick={() => setSchedulingSuggestionId(null)}>
+                    Cancelar
+                  </button>
+                </div>
+              </form>
+            ) : null}
+            <form className="mt-4 grid gap-2 border-t border-amber-200/60 pt-4" onSubmit={submitBacklog}>
+              <div className="text-xs font-bold text-amber-950">Nueva idea</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="convos-label text-xs">
+                  <span>Título</span>
+                  <input
+                    className="convos-input mt-0.5"
+                    value={backlogTitle}
+                    onChange={(e) => setBacklogTitle(e.target.value)}
+                    placeholder="Ej. Ir al museo nuevo"
+                    maxLength={200}
+                    required
+                  />
+                </label>
+                <label className="convos-label text-xs">
+                  <span>Tipo (categoría)</span>
+                  <select
+                    className="convos-input mt-0.5"
+                    value={backlogType}
+                    onChange={(e) => setBacklogType(e.target.value as PlanType)}
+                  >
+                    {PLAN_TYPES.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label className="convos-label text-xs">
+                <span>Nota (opcional)</span>
+                <textarea
+                  className="convos-input mt-0.5 min-h-[52px]"
+                  value={backlogNote}
+                  onChange={(e) => setBacklogNote(e.target.value)}
+                  maxLength={500}
+                  rows={2}
+                />
+              </label>
+              <button type="submit" className="convos-btn-primary h-9 w-fit px-4 text-xs" disabled={backlogSaving}>
+                {backlogSaving ? 'Guardando…' : 'Añadir a la lista'}
+              </button>
+            </form>
+          </div>
 
           <div className="mt-4 rounded-2xl border border-fuchsia-200/70 bg-gradient-to-br from-fuchsia-50/90 via-white/60 to-violet-50/80 p-4 ring-1 ring-white/70">
             <div className="flex flex-wrap items-start gap-3">
@@ -409,8 +785,11 @@ export default function GroupDetailPage() {
                 </label>
               </div>
 
+              <p className="text-xs text-slate-500">
+                El tipo solo sirve para categorizar en rankings y filtros; no cambia el título automáticamente.
+              </p>
               <div className="flex flex-wrap gap-2">
-                {TITLE_SUGGESTIONS[planType].map((s) => (
+                {PLAN_TITLE_HINTS.map((s) => (
                   <button
                     key={s}
                     type="button"
@@ -575,6 +954,48 @@ export default function GroupDetailPage() {
 
         <aside className="flex flex-col gap-4">
           <div className="convos-card p-5">
+            <h2 className="text-sm font-bold text-slate-800">Personas</h2>
+            <p className="mt-1 text-xs text-slate-600">Quién forma parte de este grupo.</p>
+            <ul className="mt-3 space-y-3">
+              {members === null ? (
+                <li className="text-sm text-slate-500">Cargando…</li>
+              ) : !members.length ? (
+                <li className="text-sm text-slate-500">No hay personas listadas.</li>
+              ) : (
+                members.map((m) => {
+                  const src = resolvePublicAssetUrl(m.user.avatarUrl);
+                  const label = m.user.name?.trim() || m.user.email.split('@')[0];
+                  return (
+                    <li key={m.userId} className="flex gap-3 rounded-xl border border-white/80 bg-white/60 p-2.5 ring-1 ring-violet-100/50">
+                      <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-violet-100">
+                        {src ? (
+                          <Image src={src} alt="" fill className="object-cover" unoptimized sizes="44px" />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-lg text-violet-400">👤</div>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-semibold text-slate-800">{label}</div>
+                        <div className="truncate text-xs text-slate-500">{m.user.email}</div>
+                        {m.user.bio?.trim() ? (
+                          <p className="mt-1 line-clamp-2 text-xs text-slate-600">{m.user.bio}</p>
+                        ) : null}
+                        <span
+                          className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                            m.role === 'admin' ? 'bg-violet-200 text-violet-900' : 'bg-slate-200 text-slate-700'
+                          }`}
+                        >
+                          {m.role === 'admin' ? 'Admin' : 'Miembro'}
+                        </span>
+                      </div>
+                    </li>
+                  );
+                })
+              )}
+            </ul>
+          </div>
+
+          <div className="convos-card p-5">
             <h2 className="text-sm font-bold text-slate-800">Invitar</h2>
             <p className="mt-1 text-xs text-slate-600">Genera un enlace (solo admins) y compártelo.</p>
             <button
@@ -643,6 +1064,55 @@ export default function GroupDetailPage() {
           </div>
         </aside>
       </div>
+
+      <section className="convos-card p-6">
+        <h2 className="text-sm font-bold text-slate-800">Fotos del grupo (validaciones)</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Las fotos que cada miembro envió al validar un plan. Puedes verlas aunque la hayas subido otra persona.
+        </p>
+        {validationPhotos === null ? (
+          <p className="mt-4 text-sm text-slate-500">Cargando…</p>
+        ) : !validationPhotos.length ? (
+          <p className="mt-4 text-sm text-slate-600">Aún no hay fotos de validación en este grupo.</p>
+        ) : (
+          <ul className="mt-4 grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+            {validationPhotos.map((v) => {
+              const src = resolvePublicAssetUrl(v.photo.publicUrl);
+              const who = v.user.name?.trim() || v.user.email.split('@')[0];
+              return (
+                <li
+                  key={v.id}
+                  className="overflow-hidden rounded-2xl border border-violet-100 bg-white/70 shadow-sm ring-1 ring-violet-50"
+                >
+                  <Link href={`/app/plans/${v.plan.id}`} className="block">
+                    <div className="relative aspect-square bg-slate-100">
+                      {src ? (
+                        <Image
+                          src={src}
+                          alt=""
+                          fill
+                          className="object-cover"
+                          unoptimized
+                          sizes="(max-width:768px) 50vw, 25vw"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-xs text-slate-500">Sin imagen</div>
+                      )}
+                    </div>
+                    <div className="p-2 text-xs">
+                      <div className="line-clamp-1 font-semibold text-slate-800">{v.plan.title}</div>
+                      <div className="text-slate-600">Validado por {who}</div>
+                      <div className="mt-0.5 text-[10px] font-semibold uppercase text-slate-400">
+                        {v.status === 'accepted' ? 'Aceptada' : v.status === 'rejected' ? 'Rechazada' : v.status === 'pending_review' ? 'En revisión' : v.status}
+                      </div>
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
 
       <section className="convos-card p-6">
         <h2 className="text-sm font-bold text-slate-800">Timeline del grupo</h2>
