@@ -5,9 +5,10 @@
 function normalizeApiBaseUrl(raw: string | undefined): string {
   if (!raw?.trim()) return '/api/v1';
   let u = raw.replace(/\/$/, '').trim();
-  if (u.startsWith('/')) return u;
+  const fixV2 = (s: string) => s.replace(/\/api\/v2(\/|$)/gi, '/api/v1$1');
+  if (u.startsWith('/')) return fixV2(u);
   if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
-  return u;
+  return fixV2(u);
 }
 
 const API_BASE_URL = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
