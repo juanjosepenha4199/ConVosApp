@@ -4,6 +4,78 @@ No se puede desplegar “en tu cuenta” sin que tú entres a Vercel, Railway, N
 
 ---
 
+## Guía paso a paso: pasos 2, 3 y 4 (API lista + web en Vercel)
+
+**Antes:** ya debes tener **Neon** (`DATABASE_URL`) y **Upstash** (`REDIS_URL`) como en tu `apps/api/.env` local.
+
+### Paso 2 — API en Railway
+
+1. Entra en [railway.app](https://railway.app) e inicia sesión (puedes usar GitHub).
+2. **New project** → **Deploy from GitHub repo** → autoriza a Railway si te lo pide → elige el repo **ConVosApp**.
+3. Railway creará un **servicio** conectado al repo. Ábrelo.
+4. **Settings** del servicio → **Root Directory**:
+   - **Déjalo vacío** (raíz del monorepo).  
+   - No pongas `apps/api` aquí: el `railway.toml` de la raíz ya ejecuta `npm ci && npm run build -w api`.
+5. **Variables** (pestaña **Variables** o **Raw Editor**). Añade **una por una** (copia los valores de tu `apps/api/.env` de producción, **sin** `NODE_ENV=development`):
+
+   | Nombre | Valor |
+   |--------|--------|
+   | `DATABASE_URL` | Tu URI completa de Neon |
+   | `REDIS_URL` | Solo `redis://default:...@....upstash.io:6379` (sin `redis-cli`) |
+   | `JWT_ACCESS_SECRET` | Cadena larga (en producción, **no** uses `dev_access_secret_change_me`) |
+   | `JWT_REFRESH_SECRET` | Otra cadena larga distinta |
+   | `NODE_ENV` | `production` |
+   | `JWT_ACCESS_TTL_SECONDS` | `900` (opcional) |
+   | `JWT_REFRESH_TTL_SECONDS` | `2592000` (opcional) |
+
+   Opcional si usas push: `VAPID_*` como en tu `.env`.
+
+6. **Deploy**: guarda variables; Railway redeployará solo. Mira **Deployments** → clic en el deploy → **Build Logs** / **Deploy Logs**:
+   - Debe verse `prisma migrate deploy` (release) y luego el arranque de Node.
+7. Si el build falla por `npm ci`, comprueba que el **`package-lock.json` de la raíz** del repo esté **commiteado** y pusheado a GitHub.
+
+### Paso 3 — Dominio público y probar la API
+
+1. En el mismo servicio de Railway → **Settings** → **Networking** → **Generate domain** (o **Public Networking**).
+2. Copia la URL, por ejemplo `https://convos-api-production-xxxx.up.railway.app`.
+3. En el navegador abre:
+
+   `https://ESA-URL/api/v1`
+
+   (sin barra al final después de `v1`).
+
+4. Deberías ver JSON tipo `{"ok":true}`. Si ves **502** o error, abre **Logs** en Railway y revisa `DATABASE_URL` / `REDIS_URL` / errores de Prisma.
+
+5. **Anota la URL base de la API para el front** (la usarás tal cual en el paso 4):
+
+   `https://ESA-URL/api/v1`
+
+### Paso 4 — Web en Vercel (proyecto nuevo, solo Next)
+
+1. Entra en [vercel.com](https://vercel.com) → **Add New…** → **Project**.
+2. **Import** el mismo repo **ConVosApp** (no reutilices el proyecto viejo que solo mostraba HTML de la API).
+3. Antes de **Deploy**, pulsa **Configure Project** (o el lápiz de ajustes):
+   - **Root Directory:** escribe **`apps/web`** y confirma (Vercel debe detectar **Next.js**).
+   - **Framework Preset:** Next.js.
+   - **Build Command / Output Directory:** deja los valores por defecto de Next (no fuerces `public` como en la API).
+4. **Environment Variables** → **Add**:
+   - Nombre: `NEXT_PUBLIC_API_BASE_URL`
+   - Valor: **exactamente** la URL del paso 3, por ejemplo  
+     `https://convos-api-production-xxxx.up.railway.app/api/v1`  
+     (https, sin espacios, **con** `/api/v1` al final).
+   - Marca **Production** (y Preview si quieres la misma API en previews).
+5. **Deploy**. Cuando termine, abre la URL que te da Vercel (tipo `xxx.vercel.app`).
+6. Prueba **Registro / Login**. Si falla la red, en el navegador F12 → **Red** mira si las peticiones van a tu dominio de Railway y si hay error CORS (con `origin: true` en Nest no debería).
+
+### Checklist rápido
+
+- [ ] Railway: Root Directory **vacío**, variables puestas, deploy verde.
+- [ ] `https://TU-RAILWAY/api/v1` → `{"ok":true}`.
+- [ ] Vercel: Root **`apps/web`**, `NEXT_PUBLIC_API_BASE_URL` = esa misma base API.
+- [ ] Proyecto Vercel viejo (solo `public` de la API) archivado o ignorado para no confundirte.
+
+---
+
 ## 0. Qué va dónde
 
 | Parte | Servicio recomendado | Por qué |
@@ -25,75 +97,25 @@ Guárdala: la usarás como `DATABASE_URL`.
 
 ---
 
-## 2. Redis (Upstash)
+## 2. Redis (Upstash) — referencia corta
 
-1. Entra en [upstash.com](https://upstash.com) → Redis → crea base.
-2. Copia la URL tipo `rediss://...` o la que te den como **Redis URL**.
-
-Guárdala: será `REDIS_URL`.
+1. [upstash.com](https://upstash.com) → Redis → crea base → URL TCP `redis://default:...@....upstash.io:6379` → variable `REDIS_URL` (sin el comando `redis-cli`).
 
 ---
 
-## 3. API en Railway
-
-1. Entra en [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub** → elige **ConVosApp**.
-2. **Importante:** en el servicio, **Root Directory** déjalo **vacío** (raíz del repo), para que existan `package-lock.json` y workspaces. En la raíz está `railway.toml` con build/start/migrate.
-3. En **Variables** del servicio, añade (valores de tu `.env.example` / producción):
-
-   | Variable | Ejemplo / notas |
-   |----------|------------------|
-   | `DATABASE_URL` | URI de Neon |
-   | `REDIS_URL` | URI de Upstash |
-   | `JWT_ACCESS_SECRET` | Cadena larga aleatoria |
-   | `JWT_REFRESH_SECRET` | Otra cadena larga |
-   | `NODE_ENV` | `production` |
-   | `PORT` | Railway suele inyectarla; si falla, no la fuerces |
-
-   Opcionales: `JWT_ACCESS_TTL_SECONDS`, `JWT_REFRESH_TTL_SECONDS`, etc.
-
-4. **Deploy**. El `releaseCommand` en `railway.toml` ejecuta `prisma migrate deploy` antes de levantar la API (necesita `DATABASE_URL`).
-
-5. En **Settings → Networking** genera un **dominio público** (p. ej. `xxx.up.railway.app`).
-
-6. Prueba en el navegador: `https://TU-DOMINIO-RAILWAY/api/v1` → debería responder JSON tipo `{"ok":true}` o similar.
-
-**Tu URL de API para el front será:**  
-`https://TU-DOMINIO-RAILWAY/api/v1`  
-(sin barra final extra).
-
----
-
-## 4. Web en Vercel (segundo proyecto)
-
-1. [vercel.com](https://vercel.com) → **Add New Project** → mismo repo **ConVosApp**.
-2. **Root Directory:** `apps/web` (solo la web).
-3. **Framework:** Next.js (automático).
-4. **Output Directory:** sin override raro (no uses `public` como en la API).
-5. **Environment Variables:**
-
-   | Variable | Valor |
-   |----------|--------|
-   | `NEXT_PUBLIC_API_BASE_URL` | `https://TU-DOMINIO-RAILWAY/api/v1` |
-
-   Opcional: `API_PROXY_TARGET` solo si usas rewrites en servidor; en producción lo normal es que el **navegador** llame directo a Railway con `NEXT_PUBLIC_API_BASE_URL`.
-
-6. Deploy. Abre la URL de Vercel: deberías ver la landing / login de ConVos.
-
----
-
-## 5. CORS
+## 3. CORS
 
 En `apps/api` ya está `enableCors({ origin: true })`, así que el front en otro dominio (Vercel) puede llamar a la API en Railway. Si en el futuro restringes orígenes, añade el dominio `*.vercel.app` y tu dominio custom.
 
 ---
 
-## 6. Proyecto Vercel viejo (solo `public`)
+## 4. Proyecto Vercel viejo (solo `public`)
 
 El despliegue que solo mostraba “ConVos API…” puedes **archivarlo o borrarlo** para no confundirte.
 
 ---
 
-## 7. Si algo falla
+## 5. Si algo falla
 
 - **API 502 / no arranca:** revisa logs en Railway y que `DATABASE_URL` / `REDIS_URL` sean correctas.
 - **Migraciones:** en local, con `DATABASE_URL` de Neon:  

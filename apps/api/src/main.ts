@@ -6,7 +6,23 @@ import * as express from 'express';
 import * as path from 'path';
 import { GlobalHttpExceptionFilter } from './filters/http-exception.filter';
 
+function requireEnv(name: string) {
+  const v = process.env[name];
+  if (!v?.trim()) {
+    console.error(
+      `[ConVos] Falta ${name}. En Railway: Variables del servicio que ejecuta la API (no solo el proyecto). Redeploy tras guardar.`,
+    );
+    process.exit(1);
+  }
+}
+
 async function bootstrap() {
+  // En Railway las variables van en el servicio; aquí fallamos antes de Prisma con un mensaje claro.
+  // No validamos en local: ConfigModule carga .env después de este punto.
+  if (process.env.RAILWAY_ENVIRONMENT) {
+    requireEnv('DATABASE_URL');
+    requireEnv('REDIS_URL');
+  }
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.useGlobalFilters(new GlobalHttpExceptionFilter());
   app.enableCors({
