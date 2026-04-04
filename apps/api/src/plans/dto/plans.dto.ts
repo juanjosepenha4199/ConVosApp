@@ -1,35 +1,15 @@
-import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsEnum,
   IsISO8601,
-  IsInt,
   IsOptional,
   IsString,
-  Max,
-  Min,
-  ValidateNested,
+  IsUUID,
+  MaxLength,
 } from 'class-validator';
 import { PlanType } from '@prisma/client';
-
-export class PlaceInputDto {
-  @IsOptional()
-  @IsString()
-  googlePlaceId?: string;
-
-  @IsString()
-  name!: string;
-
-  @IsString()
-  address!: string;
-
-  @IsString()
-  lat!: string; // decimal string
-
-  @IsString()
-  lng!: string; // decimal string
-}
 
 export class CreatePlanDto {
   @IsString()
@@ -41,15 +21,10 @@ export class CreatePlanDto {
   @IsISO8601()
   scheduledAt!: string;
 
-  @ValidateNested()
-  @Type(() => PlaceInputDto)
-  place!: PlaceInputDto;
-
   @IsOptional()
-  @IsInt()
-  @Min(50)
-  @Max(5000)
-  locationRadiusM?: number;
+  @IsString()
+  @MaxLength(200)
+  venueLabel?: string;
 
   @IsOptional()
   @IsBoolean()
@@ -59,6 +34,13 @@ export class CreatePlanDto {
   @IsArray()
   @IsString({ each: true })
   participants?: string[];
+
+  /** Fotos ya subidas (init + upload de galería). Máx. 8. Orden = orden en la galería. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @IsUUID('4', { each: true })
+  photoIds?: string[];
 }
 
 export class UpdatePlanDto {
@@ -75,15 +57,9 @@ export class UpdatePlanDto {
   scheduledAt?: string;
 
   @IsOptional()
-  @ValidateNested()
-  @Type(() => PlaceInputDto)
-  place?: PlaceInputDto;
-
-  @IsOptional()
-  @IsInt()
-  @Min(50)
-  @Max(5000)
-  locationRadiusM?: number;
+  @IsString()
+  @MaxLength(200)
+  venueLabel?: string | null;
 
   @IsOptional()
   @IsBoolean()

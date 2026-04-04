@@ -1,6 +1,6 @@
 # ConVos
 
-Plataforma web para crear planes reales en grupo, validarlos con foto + ubicación y convertirlos en recuerdos, con puntos, rachas, niveles y retos.
+Plataforma web para crear planes reales en grupo, validarlos con foto y convertirlos en recuerdos, con puntos, rachas, niveles y retos.
 
 ## Requisitos
 

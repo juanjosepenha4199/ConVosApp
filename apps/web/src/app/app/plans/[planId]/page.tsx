@@ -3,8 +3,29 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { api, isAbortError, resolvePublicAssetUrl, type PlanDetail, type PlanType } from '@/lib/api';
+import { useCelebration } from '@/components/CelebrationProvider';
+import {
+  api,
+  isAbortError,
+  resolvePublicAssetUrl,
+  type PlanDetail,
+  type PlanType,
+  type PlanValidationMemberView,
+} from '@/lib/api';
 import { fetchMeWithRefresh, getAccessToken } from '@/lib/auth';
+
+function planStatusEs(status: string): string {
+  switch (status) {
+    case 'scheduled':
+      return 'Programado';
+    case 'cancelled':
+      return 'Cancelado';
+    case 'completed':
+      return 'Completado';
+    default:
+      return status;
+  }
+}
 
 const PLAN_TYPES: { value: PlanType; label: string }[] = [
   { value: 'food', label: 'Comida' },
@@ -14,6 +35,16 @@ const PLAN_TYPES: { value: PlanType; label: string }[] = [
   { value: 'trip', label: 'Viaje' },
   { value: 'other', label: 'Otro' },
 ];
+
+function isPdfMime(m: string | null | undefined) {
+  return m === 'application/pdf';
+}
+
+function validationMediaList(v: PlanValidationMemberView) {
+  const main = v.photo?.publicUrl ? [v.photo] : [];
+  const extra = (v.attachments ?? []).map((a) => a.photo).filter((p) => p?.publicUrl);
+  return [...main, ...extra];
+}
 
 function formatWhen(iso: string) {
   try {
@@ -37,6 +68,7 @@ function toDatetimeLocalValue(iso: string) {
 }
 
 export default function PlanDetailPage() {
+  const celebrate = useCelebration();
   const router = useRouter();
   const params = useParams<{ planId: string }>();
   const planId = params.planId;
@@ -50,11 +82,7 @@ export default function PlanDetailPage() {
   const [editTitle, setEditTitle] = useState('');
   const [editType, setEditType] = useState<PlanType>('food');
   const [editScheduledLocal, setEditScheduledLocal] = useState('');
-  const [editPlaceName, setEditPlaceName] = useState('');
-  const [editPlaceAddress, setEditPlaceAddress] = useState('');
-  const [editLat, setEditLat] = useState('');
-  const [editLng, setEditLng] = useState('');
-  const [editRadiusM, setEditRadiusM] = useState('250');
+  const [editVenueLabel, setEditVenueLabel] = useState('');
   const [editRequiresAll, setEditRequiresAll] = useState(false);
 
   useEffect(() => {
@@ -92,11 +120,7 @@ export default function PlanDetailPage() {
     setEditTitle(plan.title);
     setEditType(plan.type);
     setEditScheduledLocal(toDatetimeLocalValue(plan.scheduledAt));
-    setEditPlaceName(plan.place?.name ?? '');
-    setEditPlaceAddress(plan.place?.address ?? '');
-    setEditLat(plan.place?.lat ?? '');
-    setEditLng(plan.place?.lng ?? '');
-    setEditRadiusM(String(plan.locationRadiusM ?? 250));
+    setEditVenueLabel(plan.venueLabel ?? '');
     setEditRequiresAll(!!plan.requiresAllConfirm);
   }, [plan, showEdit]);
 
@@ -124,7 +148,7 @@ export default function PlanDetailPage() {
     e.preventDefault();
     const token = getAccessToken();
     if (!token || !plan) return;
-    if (!editTitle.trim() || !editPlaceName.trim() || !editLat.trim() || !editLng.trim()) return;
+    if (!editTitle.trim()) return;
     setSavingEdit(true);
     setError(null);
     try {
@@ -132,17 +156,16 @@ export default function PlanDetailPage() {
         title: editTitle.trim(),
         type: editType,
         scheduledAt: new Date(editScheduledLocal).toISOString(),
-        place: {
-          name: editPlaceName.trim(),
-          address: editPlaceAddress.trim() || editPlaceName.trim(),
-          lat: editLat.trim(),
-          lng: editLng.trim(),
-        },
-        locationRadiusM: Math.min(5000, Math.max(50, Number(editRadiusM) || 250)),
+        venueLabel: editVenueLabel.trim() || null,
         requiresAllConfirm: editRequiresAll,
       });
       setPlan(updated);
       setShowEdit(false);
+      celebrate({
+        title: 'Cambios guardados',
+        message: 'El plan ya está actualizado para todo el grupo.',
+        emoji: '✅',
+      });
     } catch (err: unknown) {
       const msg =
         err && typeof err === 'object' && 'message' in err ? String((err as { message: string }).message) : 'No se pudo guardar';
@@ -155,42 +178,76 @@ export default function PlanDetailPage() {
   return (
     <div className="convos-gradient mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-5 py-6">
       <header>
-        <Link href={plan ? `/app/groups/${plan.groupId}` : '/app'} className="text-sm font-medium text-violet-600/90 hover:underline">
+        <Link href={plan ? `/app/groups/${plan.groupId}` : '/app'} className="text-sm font-medium text-red-400/90 hover:underline">
           ← Volver al grupo
         </Link>
-        <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-800">{loading ? '…' : plan?.title ?? 'Plan'}</h1>
+        <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-zinc-100">{loading ? '…' : plan?.title ?? 'Plan'}</h1>
       </header>
 
-      {error ? <div className="rounded-2xl bg-red-50 p-4 text-sm text-red-700">{error}</div> : null}
+      {plan?.galleryPhotos?.length ? (
+        <div className="convos-card overflow-hidden p-0">
+          <div className="border-b border-slate-200/80 px-4 py-2 text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-zinc-500 dark:border-white/10">
+            Fotos del plan
+          </div>
+          <div className="grid grid-cols-2 gap-1 p-2 sm:grid-cols-3 lg:grid-cols-4">
+            {plan.galleryPhotos.map((row) => {
+              const src = resolvePublicAssetUrl(row.photo.publicUrl);
+              const pdf = isPdfMime(row.photo.mimeType ?? null);
+              return (
+                <div key={row.id} className="min-w-0">
+                  {pdf && src ? (
+                    <a
+                      href={src}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex aspect-video items-center justify-center rounded-xl bg-slate-100 text-sm font-semibold text-red-500 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700"
+                    >
+                      Ver PDF
+                    </a>
+                  ) : src ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- URL dinámica
+                    <img src={src} alt="" className="aspect-video w-full rounded-xl object-cover" />
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {error ? (
+        <div className="rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm text-red-200">{error}</div>
+      ) : null}
 
       {plan ? (
         <>
           <div className="convos-card p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <p className="text-sm text-slate-600">{formatWhen(plan.scheduledAt)}</p>
-                <p className="mt-2 text-sm font-medium text-slate-800">{plan.place?.name}</p>
-                <p className="text-sm text-slate-600">{plan.place?.address}</p>
-                <p className="mt-2 text-xs text-slate-500">
-                  Tipo: <span className="font-semibold text-slate-700">{plan.type}</span>
+                <p className="text-sm text-slate-600 dark:text-zinc-400">{formatWhen(plan.scheduledAt)}</p>
+                {plan.venueLabel?.trim() ? (
+                  <p className="mt-2 text-sm font-medium text-slate-900 dark:text-zinc-100">{plan.venueLabel}</p>
+                ) : null}
+                <p className="mt-2 text-xs text-slate-500 dark:text-zinc-500">
+                  Tipo: <span className="font-semibold text-slate-700 dark:text-zinc-300">{plan.type}</span>
                 </p>
               </div>
               <span
                 className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                  plan.status === 'scheduled' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
+                  plan.status === 'scheduled' ? 'bg-emerald-500/15 text-emerald-200' : 'bg-slate-200 dark:bg-zinc-700 text-slate-700 dark:text-zinc-300'
                 }`}
               >
-                {plan.status}
+                {planStatusEs(plan.status)}
               </span>
             </div>
 
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               {plan.status === 'scheduled' ? (
                 <Link href={`/app/plans/${plan.id}/validate`} className="convos-btn-primary h-12 flex-1 text-center text-base leading-[2.75rem]">
-                  Validar plan (foto + GPS)
+                  Validar plan (foto)
                 </Link>
               ) : (
-                <p className="text-sm text-slate-600">Este plan ya no admite validación.</p>
+                <p className="text-sm text-slate-600 dark:text-zinc-400">Este plan ya no admite validación.</p>
               )}
               {plan.canEdit ? (
                 <button
@@ -204,7 +261,7 @@ export default function PlanDetailPage() {
               {plan.status === 'scheduled' && plan.canEdit ? (
                 <button
                   type="button"
-                  className="convos-btn-ghost h-12 px-6 text-sm text-red-700 ring-1 ring-red-200 hover:bg-red-50"
+                  className="convos-btn-ghost h-12 px-6 text-sm text-red-200 ring-1 ring-red-500/30 hover:border-red-500/40 hover:bg-red-500/10"
                   disabled={cancelling}
                   onClick={() => void cancelPlan()}
                 >
@@ -216,13 +273,13 @@ export default function PlanDetailPage() {
 
           {showEdit && plan.canEdit ? (
             <form className="convos-card space-y-4 p-6" onSubmit={saveEdit}>
-              <h2 className="text-sm font-bold text-slate-800">Editar plan</h2>
+              <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-100">Editar plan</h2>
               <label className="convos-label block">
-                <span className="font-medium text-slate-700">Título</span>
+                <span className="font-medium text-slate-700 dark:text-zinc-300">Título</span>
                 <input className="convos-input mt-1" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} required />
               </label>
               <label className="convos-label block">
-                <span className="font-medium text-slate-700">Tipo (categoría)</span>
+                <span className="font-medium text-slate-700 dark:text-zinc-300">Tipo (categoría)</span>
                 <select className="convos-input mt-1" value={editType} onChange={(e) => setEditType(e.target.value as PlanType)}>
                   {PLAN_TYPES.map((p) => (
                     <option key={p.value} value={p.value}>
@@ -232,7 +289,7 @@ export default function PlanDetailPage() {
                 </select>
               </label>
               <label className="convos-label block">
-                <span className="font-medium text-slate-700">Fecha y hora</span>
+                <span className="font-medium text-slate-700 dark:text-zinc-300">Fecha y hora</span>
                 <input
                   className="convos-input mt-1"
                   type="datetime-local"
@@ -241,31 +298,17 @@ export default function PlanDetailPage() {
                   required
                 />
               </label>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="convos-label">
-                  <span className="font-medium text-slate-700">Lugar (nombre)</span>
-                  <input className="convos-input mt-1" value={editPlaceName} onChange={(e) => setEditPlaceName(e.target.value)} required />
-                </label>
-                <label className="convos-label">
-                  <span className="font-medium text-slate-700">Dirección</span>
-                  <input className="convos-input mt-1" value={editPlaceAddress} onChange={(e) => setEditPlaceAddress(e.target.value)} />
-                </label>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <label className="convos-label">
-                  <span className="font-medium text-slate-700">Lat</span>
-                  <input className="convos-input mt-1 font-mono" value={editLat} onChange={(e) => setEditLat(e.target.value)} required />
-                </label>
-                <label className="convos-label">
-                  <span className="font-medium text-slate-700">Lng</span>
-                  <input className="convos-input mt-1 font-mono" value={editLng} onChange={(e) => setEditLng(e.target.value)} required />
-                </label>
-                <label className="convos-label">
-                  <span className="font-medium text-slate-700">Radio (m)</span>
-                  <input className="convos-input mt-1" value={editRadiusM} onChange={(e) => setEditRadiusM(e.target.value)} inputMode="numeric" />
-                </label>
-              </div>
-              <label className="flex items-center gap-2 text-sm text-slate-700">
+              <label className="convos-label block">
+                <span className="font-medium text-slate-700 dark:text-zinc-300">Lugar (opcional)</span>
+                <input
+                  className="convos-input mt-1"
+                  value={editVenueLabel}
+                  onChange={(e) => setEditVenueLabel(e.target.value)}
+                  maxLength={200}
+                  placeholder="Texto libre para el grupo"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-zinc-300">
                 <input type="checkbox" checked={editRequiresAll} onChange={(e) => setEditRequiresAll(e.target.checked)} />
                 Requiere que todos confirmen con validación
               </label>
@@ -276,18 +319,18 @@ export default function PlanDetailPage() {
           ) : null}
         </>
       ) : !loading ? (
-        <p className="text-sm text-slate-600">No se encontró el plan.</p>
+        <p className="text-sm text-slate-600 dark:text-zinc-400">No se encontró el plan.</p>
       ) : null}
 
       {plan?.validations?.length ? (
         <section className="convos-card p-6">
-          <h2 className="text-sm font-bold text-slate-800">Fotos de validación</h2>
-          <p className="mt-1 text-sm text-slate-600">
-            Todas las personas del grupo pueden ver las fotos que cada quien envió al validar este plan.
+          <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-100">Fotos y archivos de validación</h2>
+          <p className="mt-1 text-sm text-slate-600 dark:text-zinc-400">
+            Todas las personas del grupo pueden ver lo que cada quien envió al validar este plan (fotos y PDF).
           </p>
           <ul className="mt-4 grid gap-4 sm:grid-cols-2">
             {plan.validations.map((v) => {
-              const src = resolvePublicAssetUrl(v.photo?.publicUrl ?? null);
+              const media = validationMediaList(v);
               const who = v.user.name?.trim() || v.user.email.split('@')[0];
               const statusLabel =
                 v.status === 'accepted'
@@ -300,20 +343,43 @@ export default function PlanDetailPage() {
               return (
                 <li
                   key={v.id}
-                  className="overflow-hidden rounded-2xl border border-violet-100 bg-white/70 shadow-sm ring-1 ring-violet-50"
+                  className="overflow-hidden rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white/85 dark:bg-white/[0.06] shadow-sm ring-1 ring-white/5"
                 >
-                  <div className="relative aspect-video overflow-hidden bg-slate-100">
-                    {src ? (
-                      // eslint-disable-next-line @next/next/no-img-element -- URLs dinámicas (API / uploads)
-                      <img src={src} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                  <div className="grid grid-cols-2 gap-1 p-1 sm:grid-cols-3">
+                    {media.length ? (
+                      media.map((p) => {
+                        const src = resolvePublicAssetUrl(p.publicUrl);
+                        const pdf = isPdfMime(p.mimeType ?? null);
+                        return pdf && src ? (
+                          <a
+                            key={p.id}
+                            href={src}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex aspect-video items-center justify-center rounded-xl bg-slate-100 text-xs font-semibold text-red-500 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700"
+                          >
+                            Ver PDF
+                          </a>
+                        ) : src ? (
+                          // eslint-disable-next-line @next/next/no-img-element -- URLs dinámicas (API / uploads)
+                          <img
+                            key={p.id}
+                            src={src}
+                            alt=""
+                            className="aspect-video w-full rounded-xl object-cover"
+                          />
+                        ) : null;
+                      })
                     ) : (
-                      <div className="flex h-full items-center justify-center text-xs text-slate-500">Sin imagen</div>
+                      <div className="col-span-full flex aspect-video items-center justify-center bg-slate-200 text-xs text-slate-500 dark:bg-zinc-800 dark:text-zinc-500">
+                        Sin archivos
+                      </div>
                     )}
                   </div>
                   <div className="p-3 text-sm">
-                    <p className="text-sm font-semibold text-violet-900">Validado por {who}</p>
-                    <div className="mt-0.5 text-xs text-slate-500">{formatWhen(v.submittedAtServer)}</div>
-                    <span className="mt-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-bold uppercase text-violet-800">
+                    <p className="text-sm font-semibold text-red-200">Validado por {who}</p>
+                    <div className="mt-0.5 text-xs text-slate-500 dark:text-zinc-500">{formatWhen(v.submittedAtServer)}</div>
+                    <span className="mt-1 inline-block rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-bold uppercase text-red-300">
                       {statusLabel}
                     </span>
                   </div>

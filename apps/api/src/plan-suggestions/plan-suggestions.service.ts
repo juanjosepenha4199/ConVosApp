@@ -102,14 +102,7 @@ export class PlanSuggestionsService {
     userId: string,
     input: {
       scheduledAt: Date;
-      place: {
-        googlePlaceId?: string;
-        name: string;
-        address: string;
-        lat: string;
-        lng: string;
-      };
-      locationRadiusM?: number;
+      venueLabel?: string | null;
       requiresAllConfirm?: boolean;
       participants?: string[];
     },
@@ -126,8 +119,7 @@ export class PlanSuggestionsService {
       title: s.title,
       type: s.type,
       scheduledAt: input.scheduledAt,
-      place: input.place,
-      locationRadiusM: input.locationRadiusM,
+      venueLabel: input.venueLabel?.trim() || s.title,
       requiresAllConfirm: input.requiresAllConfirm,
       participants: input.participants,
     });

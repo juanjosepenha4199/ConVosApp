@@ -1,26 +1,20 @@
 import { api, AuthResponse } from './api';
-
-const ACCESS_KEY = 'convos.accessToken';
-const REFRESH_KEY = 'convos.refreshToken';
+import { clearTokensStorage, readAccessToken, readRefreshToken, writeTokens } from './auth-storage';
 
 export function getAccessToken() {
-  if (typeof window === 'undefined') return null;
-  return window.localStorage.getItem(ACCESS_KEY);
+  return readAccessToken();
 }
 
 export function getRefreshToken() {
-  if (typeof window === 'undefined') return null;
-  return window.localStorage.getItem(REFRESH_KEY);
+  return readRefreshToken();
 }
 
 export function setTokens(tokens: { accessToken: string; refreshToken: string }) {
-  window.localStorage.setItem(ACCESS_KEY, tokens.accessToken);
-  window.localStorage.setItem(REFRESH_KEY, tokens.refreshToken);
+  writeTokens(tokens.accessToken, tokens.refreshToken);
 }
 
 export function clearTokens() {
-  window.localStorage.removeItem(ACCESS_KEY);
-  window.localStorage.removeItem(REFRESH_KEY);
+  clearTokensStorage();
 }
 
 export async function fetchMeWithRefresh(): Promise<AuthResponse['user'] | null> {

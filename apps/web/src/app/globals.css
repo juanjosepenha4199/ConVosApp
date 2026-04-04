@@ -1,11 +1,69 @@
 @import "tailwindcss";
 
-:root {
+/* Modo oscuro con clase `dark` en <html> (Tailwind dark:…) */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* —— Tema claro (por defecto sin .dark; el script suele añadir .dark) —— */
+html {
   --background: #faf8ff;
-  --foreground: #334155;
-  --brand-from: #a78bfa;
-  --brand-mid: #67e8f9;
-  --brand-to: #f9a8d4;
+  --foreground: #0f172a;
+  --foreground-muted: #64748b;
+  --selection-bg: rgba(225, 29, 72, 0.22);
+  --selection-fg: #0f172a;
+  --neon-glow: rgba(225, 29, 72, 0.28);
+  --brand-from: #e11d48;
+  --brand-mid: #f43f5e;
+  --brand-to: #be123c;
+  --card-bg: rgba(255, 255, 255, 0.88);
+  --card-border: rgba(148, 163, 184, 0.35);
+  --card-inset: rgba(255, 255, 255, 0.95);
+  --card-shadow: 0 4px 28px -6px rgba(15, 23, 42, 0.1);
+  --card-shadow-hover: 0 18px 44px -12px rgba(225, 29, 72, 0.12);
+  --ghost-border: rgba(148, 163, 184, 0.55);
+  --ghost-bg: rgba(255, 255, 255, 0.65);
+  --ghost-text: #1e293b;
+  --input-bg: rgba(255, 255, 255, 0.95);
+  --input-border: rgba(148, 163, 184, 0.45);
+  --input-placeholder: rgba(100, 116, 139, 0.85);
+  --bento-bg: rgba(255, 255, 255, 0.72);
+  --bento-border: rgba(148, 163, 184, 0.32);
+  --nav-bg: rgba(255, 255, 255, 0.82);
+  --nav-border: rgba(148, 163, 184, 0.35);
+  --fab-bg: #ffffff;
+  --fab-border: rgba(148, 163, 184, 0.45);
+  --fab-shadow: 0 12px 40px -8px rgba(225, 29, 72, 0.2);
+  color-scheme: light;
+}
+
+html.dark {
+  --background: #030306;
+  --foreground: #e4e4e7;
+  --foreground-muted: #a1a1aa;
+  --selection-bg: rgba(248, 113, 113, 0.35);
+  --selection-fg: #ffffff;
+  --neon-glow: rgba(255, 46, 46, 0.45);
+  --brand-from: #ff2e2e;
+  --brand-mid: #ff6b6b;
+  --brand-to: #ff1744;
+  --card-bg: rgba(255, 255, 255, 0.06);
+  --card-border: rgba(255, 255, 255, 0.1);
+  --card-inset: rgba(255, 255, 255, 0.04);
+  --card-shadow: 0 20px 50px -24px rgba(0, 0, 0, 0.65);
+  --card-shadow-hover: 0 24px 60px -20px rgba(255, 46, 46, 0.12);
+  --ghost-border: rgba(255, 255, 255, 0.14);
+  --ghost-bg: rgba(255, 255, 255, 0.04);
+  --ghost-text: #fafafa;
+  --input-bg: rgba(0, 0, 0, 0.35);
+  --input-border: rgba(255, 255, 255, 0.12);
+  --input-placeholder: rgba(161, 161, 170, 0.85);
+  --bento-bg: rgba(255, 255, 255, 0.04);
+  --bento-border: rgba(255, 255, 255, 0.09);
+  --nav-bg: rgba(0, 0, 0, 0.45);
+  --nav-border: rgba(255, 255, 255, 0.1);
+  --fab-bg: rgba(24, 24, 27, 0.92);
+  --fab-border: rgba(255, 255, 255, 0.12);
+  --fab-shadow: 0 12px 40px -8px rgba(255, 46, 46, 0.25);
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -21,18 +79,52 @@ body {
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
 * {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Fondo claro con blobs suaves + movimiento */
+/* Botón flotante tema */
+.convos-theme-fab {
+  border-width: 1px;
+  border-style: solid;
+  border-color: var(--fab-border);
+  background: var(--fab-bg);
+  box-shadow: var(--fab-shadow);
+  backdrop-filter: blur(12px);
+}
+
+.convos-theme-fab:active {
+  transform: scale(0.88);
+  box-shadow: var(--fab-shadow), inset 0 3px 10px rgba(0, 0, 0, 0.12);
+}
+
+html.dark .convos-theme-fab:active {
+  box-shadow: var(--fab-shadow), inset 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+/* —— Fondo página —— */
 .convos-gradient {
-  background-color: #faf8ff;
+  background-color: var(--background);
+  animation: convos-bg-shift 22s ease-in-out infinite alternate;
+}
+
+html:not(.dark) .convos-gradient {
   background-image:
-    radial-gradient(900px circle at 15% 10%, rgba(167, 139, 250, 0.35), transparent 42%),
-    radial-gradient(800px circle at 85% 15%, rgba(103, 232, 249, 0.32), transparent 40%),
-    radial-gradient(700px circle at 50% 95%, rgba(249, 168, 212, 0.28), transparent 45%);
-  animation: convos-bg-shift 18s ease-in-out infinite alternate;
+    radial-gradient(900px circle at 15% 10%, rgba(167, 139, 250, 0.22), transparent 42%),
+    radial-gradient(800px circle at 85% 15%, rgba(103, 232, 249, 0.18), transparent 40%),
+    radial-gradient(700px circle at 50% 95%, rgba(249, 168, 212, 0.16), transparent 45%);
+}
+
+html.dark .convos-gradient {
+  background-image:
+    radial-gradient(1000px circle at 12% 8%, rgba(255, 46, 46, 0.14), transparent 42%),
+    radial-gradient(900px circle at 88% 12%, rgba(255, 80, 80, 0.1), transparent 40%),
+    radial-gradient(800px circle at 50% 100%, rgba(180, 30, 30, 0.12), transparent 48%);
 }
 
 @keyframes convos-bg-shift {
@@ -40,14 +132,14 @@ body {
     background-position: 0% 0%, 100% 0%, 50% 100%;
   }
   100% {
-    background-position: 8% 4%, 92% 8%, 48% 96%;
+    background-position: 6% 5%, 94% 10%, 48% 98%;
   }
 }
 
 .convos-brand {
-  background: linear-gradient(120deg, var(--brand-from), var(--brand-mid), var(--brand-to));
+  background: linear-gradient(125deg, var(--brand-from), var(--brand-mid), var(--brand-to));
   background-size: 200% 200%;
-  animation: convos-brand-shimmer 6s ease infinite;
+  animation: convos-brand-shimmer 5s ease infinite;
 }
 
 @keyframes convos-brand-shimmer {
@@ -60,39 +152,152 @@ body {
   }
 }
 
-/* Tarjetas interactivas */
+/* —— Tarjetas —— */
 .convos-card {
-  @apply rounded-3xl border border-white/80 bg-white/85 shadow-sm backdrop-blur-md transition-all duration-300;
-  box-shadow: 0 4px 24px -4px rgba(139, 92, 246, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.8) inset;
+  @apply rounded-[1.35rem] border shadow-lg backdrop-blur-xl;
+  background: var(--card-bg);
+  border-color: var(--card-border);
+  box-shadow: var(--card-shadow), 0 0 0 1px var(--card-inset) inset;
+  transition:
+    transform 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.22s ease,
+    border-color 0.2s ease;
 }
 
 .convos-card:hover {
-  transform: translateY(-4px) scale(1.01);
-  box-shadow: 0 20px 40px -12px rgba(139, 92, 246, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.9) inset;
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--brand-from) 35%, var(--card-border));
+  box-shadow: var(--card-shadow-hover), 0 0 0 1px var(--card-inset) inset;
 }
 
+/* —— Botón principal —— */
 .convos-btn-primary {
-  @apply inline-flex items-center justify-center rounded-full px-6 py-3 text-sm font-semibold text-white shadow-md transition-all duration-200 active:scale-[0.98];
-  background: linear-gradient(120deg, #a78bfa, #67e8f9, #f9a8d4);
-  background-size: 200% 200%;
-  animation: convos-brand-shimmer 8s ease infinite;
+  @apply inline-flex items-center justify-center rounded-full px-6 py-3 text-sm font-semibold text-white;
+  background: linear-gradient(135deg, #ff2e2e 0%, #ff1744 50%, #e11d48 100%);
+  box-shadow:
+    0 0 28px var(--neon-glow),
+    0 4px 20px rgba(255, 46, 46, 0.35);
+  transition:
+    transform 0.14s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.14s ease,
+    filter 0.14s ease;
+  touch-action: manipulation;
 }
 
-.convos-btn-primary:hover {
-  filter: brightness(1.05);
-  box-shadow: 0 12px 28px -8px rgba(167, 139, 250, 0.45);
+.convos-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  box-shadow:
+    0 0 40px rgba(255, 60, 60, 0.5),
+    0 8px 28px rgba(255, 46, 46, 0.38);
 }
 
+.convos-btn-primary:active:not(:disabled) {
+  transform: scale(0.93) translateY(2px);
+  box-shadow:
+    inset 0 6px 22px rgba(0, 0, 0, 0.42),
+    0 2px 8px rgba(255, 46, 46, 0.22);
+  filter: brightness(0.88) saturate(1.08);
+}
+
+.convos-btn-primary:focus-visible {
+  outline: 2px solid color-mix(in srgb, #ff2e2e 85%, white);
+  outline-offset: 3px;
+}
+
+.convos-btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* —— Botón secundario —— */
 .convos-btn-ghost {
-  @apply inline-flex items-center justify-center rounded-full border border-violet-200/80 bg-white/90 px-6 py-3 text-sm font-semibold text-violet-900 shadow-sm transition-all duration-200 hover:border-violet-300 hover:bg-white hover:shadow-md active:scale-[0.98];
+  @apply inline-flex items-center justify-center rounded-full border px-6 py-3 text-sm font-semibold;
+  border-color: var(--ghost-border);
+  background: var(--ghost-bg);
+  color: var(--ghost-text);
+  transition:
+    transform 0.14s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.14s ease,
+    border-color 0.14s ease,
+    background-color 0.14s ease;
+  touch-action: manipulation;
 }
 
+.convos-btn-ghost:hover:not(:disabled) {
+  border-color: color-mix(in srgb, #ff2e2e 45%, var(--ghost-border));
+  background: color-mix(in srgb, #ff2e2e 10%, var(--ghost-bg));
+  box-shadow: 0 0 22px rgba(255, 46, 46, 0.12);
+}
+
+html:not(.dark) .convos-btn-ghost:hover:not(:disabled) {
+  box-shadow: 0 4px 20px -6px rgba(225, 29, 72, 0.15);
+}
+
+.convos-btn-ghost:active:not(:disabled) {
+  transform: scale(0.94) translateY(1px);
+  box-shadow: inset 0 4px 14px rgba(0, 0, 0, 0.12);
+  filter: brightness(0.97);
+}
+
+html.dark .convos-btn-ghost:active:not(:disabled) {
+  box-shadow: inset 0 5px 18px rgba(0, 0, 0, 0.35);
+  filter: brightness(0.92);
+}
+
+.convos-btn-ghost:focus-visible {
+  outline: 2px solid color-mix(in srgb, #ff2e2e 70%, transparent);
+  outline-offset: 3px;
+}
+
+.convos-btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Otros botones / enlaces con aspecto de control */
+button:not(:disabled),
+[role='button']:not([aria-disabled='true']) {
+  transition: transform 0.14s cubic-bezier(0.4, 0, 0.2, 1);
+  touch-action: manipulation;
+}
+
+button:not(:disabled):active,
+[role='button']:not([aria-disabled='true']):active {
+  transform: scale(0.96);
+}
+
+a.convos-btn-primary:active,
+a.convos-btn-ghost:active {
+  transform: scale(0.93) translateY(2px);
+}
+
+a.convos-btn-ghost:active {
+  transform: scale(0.94) translateY(1px);
+}
+
+/* Inputs */
 .convos-input {
-  @apply h-11 w-full rounded-xl border border-violet-100 bg-white/90 px-3 text-sm outline-none transition-shadow focus:ring-4 focus:ring-violet-200/80;
+  @apply h-11 w-full rounded-xl px-3 text-sm outline-none;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--foreground);
+  transition:
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.convos-input::placeholder {
+  color: var(--input-placeholder);
+}
+
+.convos-input:focus {
+  box-shadow: 0 0 0 4px color-mix(in srgb, #ff2e2e 22%, transparent);
+  border-color: color-mix(in srgb, #ff2e2e 55%, var(--input-border));
 }
 
 .convos-label {
   @apply grid gap-1 text-sm;
+  color: var(--foreground-muted);
 }
 
 .convos-float {
@@ -109,7 +314,33 @@ body {
   }
 }
 
-/* Stickers / micro-animaciones (respetar accesibilidad) */
+/* Bento / nav */
+.convos-bento {
+  @apply rounded-[1.75rem] border backdrop-blur-xl;
+  background: var(--bento-bg);
+  border-color: var(--bento-border);
+  box-shadow: 0 0 0 1px var(--card-inset) inset;
+  transition:
+    transform 0.22s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.convos-bento:hover {
+  border-color: color-mix(in srgb, #ff2e2e 28%, var(--bento-border));
+  box-shadow:
+    0 0 48px -12px color-mix(in srgb, #ff2e2e 18%, transparent),
+    0 0 0 1px var(--card-inset) inset;
+}
+
+.convos-nav-pill {
+  @apply flex items-center gap-1 rounded-full border px-2 py-1.5 backdrop-blur-xl;
+  border-color: var(--nav-border);
+  background: var(--nav-bg);
+  box-shadow: 0 0 40px -10px color-mix(in srgb, #ff2e2e 16%, transparent);
+}
+
+/* Stickers */
 .convos-joy-row {
   display: flex;
   flex-wrap: wrap;
@@ -146,6 +377,52 @@ body {
   }
 }
 
+/* Celebración modal */
+@keyframes convos-celebrate-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes convos-celebrate-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.9) translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes convos-celebrate-emoji {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  45% {
+    transform: translateY(-8px) scale(1.06);
+  }
+  72% {
+    transform: translateY(2px) scale(0.98);
+  }
+}
+
+.convos-celebrate-backdrop {
+  animation: convos-celebrate-fade 0.22s ease-out;
+}
+
+.convos-celebrate-panel {
+  animation: convos-celebrate-pop 0.45s cubic-bezier(0.34, 1.45, 0.64, 1);
+}
+
+.convos-celebrate-emoji {
+  animation: convos-celebrate-emoji 0.85s ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .convos-gradient,
   .convos-brand,
@@ -157,5 +434,18 @@ body {
   .convos-sticker-bounce,
   .convos-wiggle {
     animation: none;
+  }
+
+  .convos-celebrate-backdrop,
+  .convos-celebrate-panel,
+  .convos-celebrate-emoji {
+    animation: none;
+  }
+
+  .convos-btn-primary:active:not(:disabled),
+  .convos-btn-ghost:active:not(:disabled),
+  button:not(:disabled):active,
+  .convos-theme-fab:active {
+    transform: none;
   }
 }

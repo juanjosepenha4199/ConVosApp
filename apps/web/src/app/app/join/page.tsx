@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
+import { useCelebration } from '@/components/CelebrationProvider';
 import { api } from '@/lib/api';
 import { getAccessToken } from '@/lib/auth';
 
@@ -35,6 +36,7 @@ function extractInviteToken(raw: string): string {
 }
 
 function JoinContent() {
+  const celebrate = useCelebration();
   const router = useRouter();
   const searchParams = useSearchParams();
   const initial = searchParams.get('token') ?? '';
@@ -63,7 +65,13 @@ function JoinContent() {
     setError(null);
     try {
       const res = await api.groups.joinByToken(access, t);
-      router.replace(`/app/groups/${res.groupId}`);
+      celebrate({
+        title: '¡Ya formas parte del grupo!',
+        message: 'Te llevamos a la página del grupo para que veáis planes e ideas.',
+        emoji: '🤝',
+        durationMs: 2800,
+      });
+      window.setTimeout(() => router.replace(`/app/groups/${res.groupId}`), 2200);
     } catch (e: unknown) {
       const msg =
         e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo unir al grupo';
@@ -75,8 +83,8 @@ function JoinContent() {
 
   return (
     <div className="convos-card mx-auto w-full max-w-md p-8">
-      <h1 className="text-2xl font-bold tracking-tight text-slate-800">Unirte a un grupo</h1>
-      <p className="mt-1 text-sm text-slate-600">
+      <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-zinc-100">Unirte a un grupo</h1>
+      <p className="mt-1 text-sm text-slate-600 dark:text-zinc-400">
         Pega el enlace completo o solo el token. Si aún no tienes sesión, te pediremos iniciar sesión y volverás aquí.
       </p>
 
@@ -90,30 +98,32 @@ function JoinContent() {
             placeholder="https://…/app/join?token=…"
           />
         </label>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-500 dark:text-zinc-500">
           También vale pegar la URL entera: detectamos el token automáticamente.
         </p>
 
-        {error ? <div className="rounded-2xl bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
+        {error ? (
+          <div className="rounded-2xl border border-red-500/25 bg-red-500/10 p-3 text-sm text-red-200">{error}</div>
+        ) : null}
 
         <button type="submit" className="convos-btn-primary h-12 w-full disabled:opacity-60" disabled={loading || !effectiveToken}>
           {loading ? 'Uniendo…' : 'Unirme'}
         </button>
       </form>
 
-      <div className="mt-6 space-y-2 text-center text-sm text-slate-600">
+      <div className="mt-6 space-y-2 text-center text-sm text-slate-600 dark:text-zinc-400">
         <div>
           ¿Necesitas cuenta?{' '}
-          <Link className="font-semibold text-violet-700 hover:underline" href={registerHref}>
+          <Link className="font-semibold text-red-400 hover:underline" href={registerHref}>
             Regístrate
           </Link>
           {' · '}
-          <Link className="font-semibold text-violet-700 hover:underline" href={loginHref}>
+          <Link className="font-semibold text-red-400 hover:underline" href={loginHref}>
             Iniciar sesión
           </Link>
         </div>
         <div>
-          <Link className="font-semibold text-violet-700 hover:underline" href="/app">
+          <Link className="font-semibold text-red-400 hover:underline" href="/app">
             Volver al dashboard
           </Link>
         </div>
@@ -127,7 +137,7 @@ export default function JoinPage() {
     <div className="convos-gradient flex min-h-[calc(100vh-0px)] flex-col justify-center px-5 py-10">
       <Suspense
         fallback={
-          <div className="convos-card mx-auto w-full max-w-md p-8 text-center text-sm text-slate-600">Cargando…</div>
+          <div className="convos-card mx-auto w-full max-w-md p-8 text-center text-sm text-slate-600 dark:text-zinc-400">Cargando…</div>
         }
       >
         <JoinContent />

@@ -1,7 +1,15 @@
+import { Transform } from 'class-transformer';
 import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsConsumerEmail } from '../../common/validators/consumer-email.validator';
+
+function trimLowerEmail({ value }: { value: unknown }) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : value;
+}
 
 export class RegisterDto {
+  @Transform(trimLowerEmail)
   @IsEmail()
+  @IsConsumerEmail()
   email!: string;
 
   @IsString()
@@ -14,6 +22,7 @@ export class RegisterDto {
 }
 
 export class LoginDto {
+  @Transform(trimLowerEmail)
   @IsEmail()
   email!: string;
 

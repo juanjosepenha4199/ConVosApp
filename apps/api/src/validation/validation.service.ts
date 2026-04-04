@@ -11,21 +11,11 @@ import { ChallengesService } from '../challenges/challenges.service';
 import { createHash } from 'crypto';
 import { PlanStatus, ValidationStatus } from '@prisma/client';
 
-function haversineMeters(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number,
-) {
-  const R = 6371000;
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
+const photoForValidation = {
+  id: true,
+  publicUrl: true,
+  mimeType: true,
+} as const;
 
 @Injectable()
 export class ValidationService {
@@ -39,7 +29,6 @@ export class ValidationService {
   async init(planId: string, userId: string) {
     const plan = await this.prisma.plan.findUnique({
       where: { id: planId },
-      include: { place: true },
     });
     if (!plan) throw new NotFoundException('PLAN_NOT_FOUND');
     await this.groups.requireMember(plan.groupId, userId);
@@ -56,10 +45,7 @@ export class ValidationService {
     return {
       photoId: photo.id,
       uploadUrl: `/api/v1/plans/${planId}/validation/upload?photoId=${photo.id}`,
-      constraints: {
-        maxSkewSeconds: 120,
-        radiusM: plan.locationRadiusM,
-      },
+      constraints: { maxSkewSeconds: 120 },
     };
   }
 
@@ -69,6 +55,7 @@ export class ValidationService {
     photoId: string;
     buffer: Buffer;
     filename: string;
+    mimeType: string | null;
   }) {
     const photo = await this.prisma.photo.findUnique({
       where: { id: input.photoId },
@@ -79,13 +66,13 @@ export class ValidationService {
 
     const sha256 = createHash('sha256').update(input.buffer).digest('hex');
 
-    // Keep storageKey as final file name; controller decides path
     return this.prisma.photo.update({
       where: { id: input.photoId },
       data: {
         sha256,
         storageKey: input.filename,
         publicUrl: `/uploads/${input.filename}`,
+        mimeType: input.mimeType,
       },
     });
   }
@@ -93,29 +80,45 @@ export class ValidationService {
   async submit(input: {
     planId: string;
     userId: string;
-    photoId: string;
+    photoIds: string[];
     capturedAtClient: Date;
-    lat: number;
-    lng: number;
-    gpsAccuracyM?: number;
     deviceInfo?: any;
   }) {
+    const seen = new Set<string>();
+    const rawIds: string[] = [];
+    for (const id of input.photoIds) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        rawIds.push(id);
+      }
+    }
+    if (rawIds.length === 0) throw new BadRequestException('NO_PHOTOS');
+    if (rawIds.length > 12) throw new BadRequestException('TOO_MANY_ATTACHMENTS');
+
+    const primaryPhotoId = rawIds[0];
+
     const plan = await this.prisma.plan.findUnique({
       where: { id: input.planId },
-      include: { place: true, participants: true, validations: true },
+      include: { participants: true, validations: true },
     });
     if (!plan) throw new NotFoundException('PLAN_NOT_FOUND');
     await this.groups.requireMember(plan.groupId, input.userId);
     if (plan.status !== PlanStatus.scheduled)
       throw new ForbiddenException('PLAN_NOT_VALIDATABLE');
 
-    const photo = await this.prisma.photo.findUnique({
-      where: { id: input.photoId },
+    const photos = await this.prisma.photo.findMany({
+      where: { id: { in: rawIds } },
     });
-    if (!photo) throw new NotFoundException('PHOTO_NOT_FOUND');
-    if (photo.ownerUserId !== input.userId)
-      throw new ForbiddenException('NOT_OWNER');
-    if (!photo.publicUrl) throw new BadRequestException('PHOTO_NOT_UPLOADED');
+    if (photos.length !== rawIds.length)
+      throw new NotFoundException('PHOTO_NOT_FOUND');
+
+    const byId = new Map(photos.map((p) => [p.id, p]));
+    for (const id of rawIds) {
+      const p = byId.get(id)!;
+      if (p.ownerUserId !== input.userId)
+        throw new ForbiddenException('NOT_OWNER');
+      if (!p.publicUrl) throw new BadRequestException('PHOTO_NOT_UPLOADED');
+    }
 
     const now = new Date();
     const skewSeconds =
@@ -124,44 +127,9 @@ export class ValidationService {
       return this.reject(
         plan.id,
         input.userId,
-        input.photoId,
+        primaryPhotoId,
         input.capturedAtClient,
-        input.lat,
-        input.lng,
-        0,
         'TIME_SKEW',
-      );
-    }
-
-    const planLat = Number(plan.place.lat);
-    const planLng = Number(plan.place.lng);
-    const dist = Math.round(
-      haversineMeters(input.lat, input.lng, planLat, planLng),
-    );
-
-    if (input.gpsAccuracyM && input.gpsAccuracyM > 200) {
-      return this.reject(
-        plan.id,
-        input.userId,
-        input.photoId,
-        input.capturedAtClient,
-        input.lat,
-        input.lng,
-        dist,
-        'GPS_ACCURACY_LOW',
-      );
-    }
-
-    if (dist > plan.locationRadiusM) {
-      return this.reject(
-        plan.id,
-        input.userId,
-        input.photoId,
-        input.capturedAtClient,
-        input.lat,
-        input.lng,
-        dist,
-        'TOO_FAR',
       );
     }
 
@@ -174,13 +142,29 @@ export class ValidationService {
       data: {
         planId: plan.id,
         userId: input.userId,
-        photoId: input.photoId,
+        photoId: primaryPhotoId,
         capturedAtClient: input.capturedAtClient,
-        lat: input.lat.toString(),
-        lng: input.lng.toString(),
-        distanceToPlanM: dist,
         status: ValidationStatus.accepted,
         metadata: input.deviceInfo ?? undefined,
+        attachments:
+          rawIds.length > 1
+            ? {
+                create: rawIds.slice(1).map((photoId, idx) => ({
+                  photoId,
+                  sortOrder: idx,
+                })),
+              }
+            : undefined,
+      },
+      include: {
+        photo: { select: { ...photoForValidation } },
+        attachments: {
+          orderBy: { sortOrder: 'asc' },
+          include: { photo: { select: { ...photoForValidation } } },
+        },
+        user: {
+          select: { id: true, name: true, email: true, avatarUrl: true },
+        },
       },
     });
 
@@ -189,13 +173,14 @@ export class ValidationService {
         groupId: plan.groupId,
         type: 'plan_validated',
         planId: plan.id,
-        photoId: input.photoId,
+        photoId: primaryPhotoId,
         actorUserId: input.userId,
         occurredAt: now,
         payload: {
           title: plan.title,
           type: plan.type,
-          placeName: plan.place.name,
+          venueLabel: plan.venueLabel,
+          mediaCount: rawIds.length,
         },
       },
     });
@@ -223,9 +208,6 @@ export class ValidationService {
     userId: string,
     photoId: string,
     capturedAtClient: Date,
-    lat: number,
-    lng: number,
-    distanceToPlanM: number,
     reason: string,
   ) {
     const existing = await this.prisma.planValidation.findUnique({
@@ -239,9 +221,6 @@ export class ValidationService {
         userId,
         photoId,
         capturedAtClient,
-        lat: lat.toString(),
-        lng: lng.toString(),
-        distanceToPlanM,
         status: ValidationStatus.rejected,
         rejectReason: reason,
       },
@@ -284,7 +263,11 @@ export class ValidationService {
       where: { planId, plan: { group: { members: { some: { userId } } } } },
       orderBy: { submittedAtServer: 'desc' },
       include: {
-        photo: { select: { id: true, publicUrl: true } },
+        photo: { select: { ...photoForValidation } },
+        attachments: {
+          orderBy: { sortOrder: 'asc' },
+          include: { photo: { select: { ...photoForValidation } } },
+        },
         user: {
           select: { id: true, name: true, email: true, avatarUrl: true },
         },

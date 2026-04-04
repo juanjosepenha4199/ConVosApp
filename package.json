@@ -4,7 +4,7 @@
   "private": true,
   "description": "ConVos - planes reales con validación, gamificación y recuerdos.",
   "scripts": {
-    "dev": "npm run dev -w web & npm run start:dev -w api",
+    "dev": "npx --yes concurrently -k -n api,web -c magenta,cyan \"npm run start:dev -w api\" \"npm run dev -w web\"",
     "dev:web": "npm run dev -w web",
     "dev:api": "npm run start:dev -w api",
     "build": "npm run build -w web && npm run build -w api",
@@ -13,7 +13,9 @@
     "db:up": "docker compose -f infra/docker-compose.yml up -d",
     "db:down": "docker compose -f infra/docker-compose.yml down",
     "db:migrate": "npm run db:migrate -w api",
-    "db:seed": "npm run db:seed -w api"
+    "db:deploy": "npm run db:deploy -w api",
+    "db:seed": "npm run db:seed -w api",
+    "db:reset": "npm run db:reset -w api"
   },
   "workspaces": [
     "apps/*"

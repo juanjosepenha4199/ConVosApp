@@ -18,12 +18,7 @@ import * as path from 'path';
 import { UPLOADS_ABSOLUTE_DIR } from '../uploads-dir';
 import { ValidationSubmitDto } from './dto/validation.dto';
 import { mkdir, writeFile } from 'fs/promises';
-
-function safeExt(mime?: string) {
-  if (mime === 'image/png') return '.png';
-  if (mime === 'image/webp') return '.webp';
-  return '.jpg';
-}
+import { safeExtFromMime } from '../common/safe-upload-ext';
 
 @UseGuards(JwtAuthGuard)
 @Controller()
@@ -51,7 +46,8 @@ export class ValidationController {
     if (!photoId) throw new Error('photoId required');
     if (!file) throw new Error('file required');
 
-    const filename = `photo_${Date.now()}${safeExt(file.mimetype)}`;
+    const stamp = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const filename = `photo_${stamp}${safeExtFromMime(file.mimetype)}`;
     const outPath = path.join(UPLOADS_ABSOLUTE_DIR, filename);
     await mkdir(path.dirname(outPath), { recursive: true });
     await writeFile(outPath, file.buffer);
@@ -62,6 +58,7 @@ export class ValidationController {
       photoId,
       buffer: file.buffer ?? Buffer.alloc(0),
       filename,
+      mimeType: file.mimetype || null,
     });
     return { ok: true, photo };
   }
@@ -75,11 +72,8 @@ export class ValidationController {
     return this.validation.submit({
       planId,
       userId: req.user.userId,
-      photoId: dto.photoId,
+      photoIds: dto.photoIds,
       capturedAtClient: new Date(dto.capturedAtClient),
-      lat: dto.lat,
-      lng: dto.lng,
-      gpsAccuracyM: dto.gpsAccuracyM,
       deviceInfo: dto.deviceInfo,
     });
   }

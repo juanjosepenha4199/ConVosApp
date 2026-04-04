@@ -25,7 +25,10 @@ export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
   findByEmail(email: string) {
-    return this.prisma.user.findUnique({ where: { email } });
+    const normalized = email.trim().toLowerCase();
+    return this.prisma.user.findFirst({
+      where: { email: { equals: normalized, mode: 'insensitive' } },
+    });
   }
 
   findById(id: string) {
@@ -35,7 +38,7 @@ export class UsersService {
   createLocalUser(input: CreateLocalUserInput) {
     return this.prisma.user.create({
       data: {
-        email: input.email,
+        email: input.email.trim().toLowerCase(),
         passwordHash: input.passwordHash,
         name: input.name,
       },
@@ -43,6 +46,7 @@ export class UsersService {
   }
 
   async upsertGoogleUser(input: UpsertGoogleUserInput) {
+    const emailNorm = input.email.trim().toLowerCase();
     const bySub = await this.prisma.user.findUnique({
       where: { googleSub: input.googleSub },
     });
@@ -50,20 +54,21 @@ export class UsersService {
       return this.prisma.user.update({
         where: { id: bySub.id },
         data: {
-          email: input.email,
+          email: emailNorm,
           name: input.name ?? bySub.name,
           avatarUrl: input.avatarUrl ?? bySub.avatarUrl,
         },
       });
     }
 
-    const byEmail = await this.prisma.user.findUnique({
-      where: { email: input.email },
+    const byEmail = await this.prisma.user.findFirst({
+      where: { email: { equals: emailNorm, mode: 'insensitive' } },
     });
     if (byEmail) {
       return this.prisma.user.update({
         where: { id: byEmail.id },
         data: {
+          email: emailNorm,
           googleSub: input.googleSub,
           name: input.name ?? byEmail.name,
           avatarUrl: input.avatarUrl ?? byEmail.avatarUrl,
@@ -73,7 +78,7 @@ export class UsersService {
 
     return this.prisma.user.create({
       data: {
-        email: input.email,
+        email: emailNorm,
         googleSub: input.googleSub,
         name: input.name,
         avatarUrl: input.avatarUrl,
@@ -165,7 +170,13 @@ export class UsersService {
       orderBy: { submittedAtServer: 'desc' },
       take: 80,
       include: {
-        photo: { select: { id: true, publicUrl: true } },
+        photo: { select: { id: true, publicUrl: true, mimeType: true } },
+        attachments: {
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            photo: { select: { id: true, publicUrl: true, mimeType: true } },
+          },
+        },
         plan: {
           select: {
             id: true,
@@ -173,8 +184,8 @@ export class UsersService {
             type: true,
             status: true,
             scheduledAt: true,
+            venueLabel: true,
             group: { select: { id: true, name: true } },
-            place: { select: { name: true } },
           },
         },
       },

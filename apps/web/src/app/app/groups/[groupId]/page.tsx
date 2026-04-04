@@ -3,9 +3,11 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { ConvosPartyGif } from '@/components/ConvosJoy';
+import { useCelebration } from '@/components/CelebrationProvider';
 import {
+  absoluteUrlForApiPath,
   api,
   isAbortError,
   resolvePublicAssetUrl,
@@ -16,6 +18,26 @@ import {
   type PlanType,
 } from '@/lib/api';
 import { fetchMeWithRefresh, getAccessToken } from '@/lib/auth';
+
+const MAX_PLAN_GALLERY = 8;
+const PLAN_GALLERY_ACCEPT =
+  'image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,application/pdf,.pdf,.heic,.heif';
+
+type PlanGallerySlot = {
+  key: string;
+  file?: File;
+  blob?: Blob;
+  previewUrl: string;
+};
+
+function newPlanGalleryKey() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function planGalleryPdf(slot: PlanGallerySlot) {
+  return slot.file?.type === 'application/pdf' || !!slot.file?.name?.toLowerCase().endsWith('.pdf');
+}
 
 const PLAN_TYPES: { value: PlanType; label: string }[] = [
   { value: 'food', label: 'Comida' },
@@ -49,14 +71,12 @@ const PLACE_SUGGESTIONS: string[] = [
   'Museo',
 ];
 
-const LAST_COORDS_KEY = 'convos.lastPlanCoords';
-
 type QuickPreset = {
   id: string;
   label: string;
   emoji: string;
   title: string;
-  placeName: string;
+  venueHint: string;
   type: PlanType;
   hour: number;
   minute: number;
@@ -65,10 +85,10 @@ type QuickPreset = {
 };
 
 const QUICK_PLAN_PRESETS: QuickPreset[] = [
-  { id: 'cena-hoy', label: 'Cena hoy', emoji: '🍝', title: 'Cena juntos', placeName: 'Restaurante', type: 'food', addDays: 0, hour: 20, minute: 0 },
-  { id: 'cafe-manana', label: 'Café mañana', emoji: '☕', title: 'Café y charla', placeName: 'Cafetería', type: 'food', addDays: 1, hour: 11, minute: 0 },
-  { id: 'parque-sab', label: 'Parque sáb.', emoji: '🌳', title: 'Plan en el parque', placeName: 'Parque', type: 'hangout', nextDow: 6, hour: 17, minute: 0 },
-  { id: 'cita-noche', label: 'Cita noche', emoji: '💜', title: 'Noche juntos', placeName: 'Cita', type: 'date', addDays: 1, hour: 19, minute: 30 },
+  { id: 'cena-hoy', label: 'Cena hoy', emoji: '🍝', title: 'Cena juntos', venueHint: 'Restaurante', type: 'food', addDays: 0, hour: 20, minute: 0 },
+  { id: 'cafe-manana', label: 'Café mañana', emoji: '☕', title: 'Café y charla', venueHint: 'Cafetería', type: 'food', addDays: 1, hour: 11, minute: 0 },
+  { id: 'parque-sab', label: 'Parque sáb.', emoji: '🌳', title: 'Plan en el parque', venueHint: 'Parque', type: 'hangout', nextDow: 6, hour: 17, minute: 0 },
+  { id: 'cita-noche', label: 'Cita noche', emoji: '💜', title: 'Noche juntos', venueHint: 'Cita', type: 'date', addDays: 1, hour: 19, minute: 30 },
 ];
 
 function isoForQuickPreset(p: QuickPreset): string {
@@ -85,25 +105,16 @@ function isoForQuickPreset(p: QuickPreset): string {
   return d.toISOString();
 }
 
-function readCachedCoords(): { lat: string; lng: string } | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = localStorage.getItem(LAST_COORDS_KEY);
-    if (!raw) return null;
-    const o = JSON.parse(raw) as { lat?: string; lng?: string; t?: number };
-    if (!o.lat || !o.lng) return null;
-    if (typeof o.t === 'number' && Date.now() - o.t > 7 * 24 * 60 * 60 * 1000) return null;
-    return { lat: o.lat, lng: o.lng };
-  } catch {
-    return null;
-  }
-}
-
-function writeCachedCoords(lat: string, lng: string) {
-  try {
-    localStorage.setItem(LAST_COORDS_KEY, JSON.stringify({ lat, lng, t: Date.now() }));
-  } catch {
-    /* ignore */
+function planStatusEs(status: string): string {
+  switch (status) {
+    case 'scheduled':
+      return 'Programado';
+    case 'cancelled':
+      return 'Cancelado';
+    case 'completed':
+      return 'Completado';
+    default:
+      return status;
   }
 }
 
@@ -126,10 +137,11 @@ function formatFeedLine(item: FeedItem): { title: string; sub?: string } {
   const payload = item.payload ?? {};
   if (item.type === 'plan_validated') {
     const planTitle = item.plan?.title ?? (payload.title as string) ?? 'un plan';
-    const placeName = payload.placeName as string | undefined;
+    const venue =
+      (payload.venueLabel as string | undefined) || (payload.placeName as string | undefined);
     return {
       title: `Validación en «${planTitle}»`,
-      sub: `Validado por ${actor}${placeName ? ` · ${placeName}` : ''}`,
+      sub: `Validado por ${actor}${venue ? ` · ${venue}` : ''}`,
     };
   }
   if (item.type === 'mission_completed') {
@@ -145,8 +157,13 @@ function formatFeedLine(item: FeedItem): { title: string; sub?: string } {
   return { title: `${actor} — ${item.type}`, sub: undefined };
 }
 
+function errMessage(e: unknown): string {
+  return e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : '';
+}
+
 export default function GroupDetailPage() {
   const router = useRouter();
+  const celebrate = useCelebration();
   const params = useParams<{ groupId: string }>();
   const groupId = params.groupId;
 
@@ -165,11 +182,7 @@ export default function GroupDetailPage() {
   const [backlogSaving, setBacklogSaving] = useState(false);
   const [schedulingSuggestionId, setSchedulingSuggestionId] = useState<string | null>(null);
   const [schLocal, setSchLocal] = useState('');
-  const [schPlace, setSchPlace] = useState('');
-  const [schAddr, setSchAddr] = useState('');
-  const [schLat, setSchLat] = useState('');
-  const [schLng, setSchLng] = useState('');
-  const [schRadius, setSchRadius] = useState('250');
+  const [schVenueLabel, setSchVenueLabel] = useState('');
   const [schedulingBusy, setSchedulingBusy] = useState(false);
   const [editingSuggestion, setEditingSuggestion] = useState<PlanSuggestionRow | null>(null);
   const [editSugTitle, setEditSugTitle] = useState('');
@@ -180,6 +193,13 @@ export default function GroupDetailPage() {
   const [loading, setLoading] = useState(true);
   const [showPlanForm, setShowPlanForm] = useState(false);
   const [savingPlan, setSavingPlan] = useState(false);
+  const planGalleryFileRef = useRef<HTMLInputElement>(null);
+  const planGalleryVideoRef = useRef<HTMLVideoElement | null>(null);
+  const planGalleryCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const planGalleryStreamRef = useRef<MediaStream | null>(null);
+  const [planGallerySlots, setPlanGallerySlots] = useState<PlanGallerySlot[]>([]);
+  const [planGalleryCamReady, setPlanGalleryCamReady] = useState(false);
+  const [planGalleryFacing, setPlanGalleryFacing] = useState<'environment' | 'user'>('environment');
   const [quickBusy, setQuickBusy] = useState<string | null>(null);
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
@@ -187,11 +207,7 @@ export default function GroupDetailPage() {
   const [title, setTitle] = useState('');
   const [planType, setPlanType] = useState<PlanType>('food');
   const [scheduledLocal, setScheduledLocal] = useState('');
-  const [placeName, setPlaceName] = useState('');
-  const [placeAddress, setPlaceAddress] = useState('');
-  const [lat, setLat] = useState('');
-  const [lng, setLng] = useState('');
-  const [radiusM, setRadiusM] = useState('250');
+  const [venueLabel, setVenueLabel] = useState('');
 
   const defaultSchedule = useMemo(() => {
     const d = new Date();
@@ -200,6 +216,35 @@ export default function GroupDetailPage() {
     const pad = (n: number) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }, []);
+
+  const canPlanGalleryCamera = useMemo(
+    () => typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia,
+    [],
+  );
+
+  const planGallerySlotsRef = useRef(planGallerySlots);
+  planGallerySlotsRef.current = planGallerySlots;
+
+  useEffect(() => {
+    return () => {
+      planGallerySlotsRef.current.forEach((s) => URL.revokeObjectURL(s.previewUrl));
+      planGalleryStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showPlanForm) {
+      planGalleryStreamRef.current?.getTracks().forEach((t) => t.stop());
+      planGalleryStreamRef.current = null;
+      const v = planGalleryVideoRef.current;
+      if (v) v.srcObject = null;
+      setPlanGalleryCamReady(false);
+      setPlanGallerySlots((prev) => {
+        prev.forEach((s) => URL.revokeObjectURL(s.previewUrl));
+        return [];
+      });
+    }
+  }, [showPlanForm]);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -264,78 +309,146 @@ export default function GroupDetailPage() {
     if (!scheduledLocal && defaultSchedule) setScheduledLocal(defaultSchedule);
   }, [defaultSchedule, scheduledLocal]);
 
+  async function requestPlanGalleryCamera(preferredFacing?: 'environment' | 'user') {
+    const want = preferredFacing ?? planGalleryFacing;
+    setError(null);
+    setPlanGalleryCamReady(false);
+    planGalleryStreamRef.current?.getTracks().forEach((t) => t.stop());
+    planGalleryStreamRef.current = null;
+    const el = planGalleryVideoRef.current;
+    if (el) el.srcObject = null;
+    try {
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: want } },
+          audio: false,
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+      planGalleryStreamRef.current = stream;
+      const video = planGalleryVideoRef.current;
+      if (video) {
+        video.srcObject = stream;
+        await video.play().catch(() => undefined);
+      }
+      setPlanGalleryCamReady(true);
+    } catch {
+      setError('No se pudo acceder a la cámara para las fotos del plan.');
+    }
+  }
+
+  function flipPlanGalleryCamera() {
+    const next = planGalleryFacing === 'environment' ? 'user' : 'environment';
+    setPlanGalleryFacing(next);
+    void requestPlanGalleryCamera(next);
+  }
+
+  async function capturePlanGalleryPhoto() {
+    setError(null);
+    const video = planGalleryVideoRef.current;
+    const canvas = planGalleryCanvasRef.current;
+    if (!video || !canvas) return;
+    if (!planGalleryStreamRef.current) {
+      setError('Activa primero la cámara para añadir una foto al plan.');
+      return;
+    }
+    if (planGallerySlots.length >= MAX_PLAN_GALLERY) {
+      setError(`Máximo ${MAX_PLAN_GALLERY} fotos o archivos por plan.`);
+      return;
+    }
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!w || !h) {
+      setError('Espera un segundo a que la cámara cargue y vuelve a intentar.');
+      return;
+    }
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, w, h);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+    if (!blob) {
+      setError('No se pudo generar la imagen.');
+      return;
+    }
+    const previewUrl = URL.createObjectURL(blob);
+    setPlanGallerySlots((prev) => [...prev, { key: newPlanGalleryKey(), blob, previewUrl }]);
+  }
+
+  function onPlanGalleryFiles(e: ChangeEvent<HTMLInputElement>) {
+    setError(null);
+    const list = e.target.files;
+    if (!list?.length) return;
+    setPlanGallerySlots((prev) => {
+      const next = [...prev];
+      for (let i = 0; i < list.length; i++) {
+        if (next.length >= MAX_PLAN_GALLERY) {
+          setError(`Solo se permiten hasta ${MAX_PLAN_GALLERY} archivos.`);
+          break;
+        }
+        const file = list[i];
+        next.push({ key: newPlanGalleryKey(), file, previewUrl: URL.createObjectURL(file) });
+      }
+      return next;
+    });
+    e.target.value = '';
+  }
+
+  function removePlanGallerySlot(key: string) {
+    setPlanGallerySlots((prev) => {
+      const item = prev.find((x) => x.key === key);
+      if (item) URL.revokeObjectURL(item.previewUrl);
+      return prev.filter((x) => x.key !== key);
+    });
+  }
+
   async function submitPlan(e: React.FormEvent) {
     e.preventDefault();
-    if (!token || !title.trim() || !placeName.trim() || !lat.trim() || !lng.trim()) return;
+    if (!token || !title.trim()) return;
     setSavingPlan(true);
     setError(null);
     try {
       const scheduledAt = new Date(scheduledLocal).toISOString();
+      const photoIds: string[] = [];
+      for (const slot of planGallerySlots) {
+        const body = slot.file ?? slot.blob;
+        if (!body) continue;
+        const init = await api.plans.galleryInit(token, groupId);
+        const fd = new FormData();
+        const name =
+          slot.file?.name || (body.type === 'image/png' ? 'foto.png' : 'foto.jpg');
+        fd.append('file', body, name);
+        const upRes = await fetch(absoluteUrlForApiPath(init.uploadUrl), {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}` },
+          body: fd,
+        });
+        if (!upRes.ok) throw new Error(await upRes.text());
+        photoIds.push(init.photoId);
+      }
       await api.plans.create(token, groupId, {
         title: title.trim(),
         type: planType,
         scheduledAt,
-        place: {
-          name: placeName.trim(),
-          address: placeAddress.trim() || placeName.trim(),
-          lat: lat.trim(),
-          lng: lng.trim(),
-        },
-        locationRadiusM: Math.min(5000, Math.max(50, Number(radiusM) || 250)),
+        venueLabel: venueLabel.trim() || undefined,
+        ...(photoIds.length ? { photoIds } : {}),
       });
       setTitle('');
+      setVenueLabel('');
       setShowPlanForm(false);
       await load();
+      celebrate({
+        title: '¡Plan creado!',
+        message: 'Ya está en la lista del grupo. Cuando llegue el momento, validadlo con una foto.',
+        emoji: '🎉',
+      });
     } catch (e: unknown) {
-      const msg =
-        e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'Error al crear el plan';
-      setError(msg);
+      setError(errMessage(e) || 'Error al crear el plan');
     } finally {
       setSavingPlan(false);
-    }
-  }
-
-  async function fillMyLocation() {
-    try {
-      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 12000,
-          maximumAge: 0,
-        });
-      });
-      const la = String(pos.coords.latitude);
-      const ln = String(pos.coords.longitude);
-      setLat(la);
-      setLng(ln);
-      writeCachedCoords(la, ln);
-    } catch {
-      setError('No se pudo obtener tu ubicación. Activa permisos/GPS e inténtalo de nuevo.');
-    }
-  }
-
-  async function fillScheduleLocation() {
-    try {
-      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 12000,
-          maximumAge: 0,
-        });
-      });
-      const la = String(pos.coords.latitude);
-      const ln = String(pos.coords.longitude);
-      setSchLat(la);
-      setSchLng(ln);
-      writeCachedCoords(la, ln);
-    } catch {
-      const c = readCachedCoords();
-      if (c) {
-        setSchLat(c.lat);
-        setSchLng(c.lng);
-        return;
-      }
-      setError('No se pudo obtener tu ubicación. Activa permisos/GPS o escribe lat/lng a mano.');
     }
   }
 
@@ -344,44 +457,19 @@ export default function GroupDetailPage() {
     setQuickBusy(preset.id);
     setError(null);
     try {
-      let la: string;
-      let ln: string;
-      try {
-        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy: true,
-            timeout: 14000,
-            maximumAge: 90000,
-          });
-        });
-        la = String(pos.coords.latitude);
-        ln = String(pos.coords.longitude);
-        writeCachedCoords(la, ln);
-      } catch {
-        const c = readCachedCoords();
-        if (!c) {
-          setError('Para el plan rápido necesitamos ubicación una vez, o usa «Personalizar plan».');
-          return;
-        }
-        la = c.lat;
-        ln = c.lng;
-      }
       const scheduledAt = isoForQuickPreset(preset);
       await api.plans.create(token, groupId, {
         title: preset.title,
         type: preset.type,
         scheduledAt,
-        place: {
-          name: preset.placeName,
-          address: preset.placeName,
-          lat: la,
-          lng: ln,
-        },
-        locationRadiusM: 400,
+        venueLabel: preset.venueHint,
       });
-      setLat(la);
-      setLng(ln);
       await load();
+      celebrate({
+        title: '¡Listo en un toque!',
+        message: 'El plan ya tiene fecha. Lo verás abajo en la lista.',
+        emoji: preset.emoji,
+      });
     } catch (e: unknown) {
       const msg =
         e && typeof e === 'object' && 'message' in e
@@ -403,6 +491,12 @@ export default function GroupDetailPage() {
       const url = `${base}/app/join?token=${encodeURIComponent(inv.token)}`;
       setInviteUrl(url);
       await navigator.clipboard.writeText(url);
+      celebrate({
+        title: 'Enlace copiado',
+        message: 'Compártelo por WhatsApp o donde quieras. Válido unos días.',
+        emoji: '🔗',
+        durationMs: 3800,
+      });
     } catch (e: unknown) {
       const msg =
         e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'Solo admins pueden crear enlaces';
@@ -426,6 +520,11 @@ export default function GroupDetailPage() {
       setBacklogTitle('');
       setBacklogNote('');
       await load();
+      celebrate({
+        title: 'Idea guardada',
+        message: 'Cuando el grupo esté listo, agendad fecha y se convertirá en plan.',
+        emoji: '💡',
+      });
     } catch (e: unknown) {
       const msg =
         e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo guardar la idea';
@@ -438,38 +537,31 @@ export default function GroupDetailPage() {
   function openSchedule(s: PlanSuggestionRow) {
     setSchedulingSuggestionId(s.id);
     setSchLocal(defaultSchedule);
-    setSchPlace('');
-    setSchAddr('');
-    setSchLat('');
-    setSchLng('');
-    setSchRadius('250');
+    setSchVenueLabel('');
     setError(null);
   }
 
   async function submitScheduleForm(e: React.FormEvent) {
     e.preventDefault();
     if (!token || !schedulingSuggestionId) return;
-    if (!schPlace.trim() || !schLat.trim() || !schLng.trim()) return;
     setSchedulingBusy(true);
     setError(null);
     try {
       const out = await api.planSuggestions.schedule(token, groupId, schedulingSuggestionId, {
         scheduledAt: new Date(schLocal).toISOString(),
-        place: {
-          name: schPlace.trim(),
-          address: schAddr.trim() || schPlace.trim(),
-          lat: schLat.trim(),
-          lng: schLng.trim(),
-        },
-        locationRadiusM: Math.min(5000, Math.max(50, Number(schRadius) || 250)),
+        venueLabel: schVenueLabel.trim() || undefined,
       });
       setSchedulingSuggestionId(null);
       await load();
-      router.push(`/app/plans/${out.planId}`);
+      celebrate({
+        title: '¡Plan agendado!',
+        message: 'Te abrimos el detalle para que veas fecha, lugar y validación.',
+        emoji: '📅',
+        durationMs: 3200,
+      });
+      window.setTimeout(() => router.push(`/app/plans/${out.planId}`), 2600);
     } catch (e: unknown) {
-      const msg =
-        e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo crear el plan';
-      setError(msg);
+      setError(errMessage(e) || 'No se pudo crear el plan');
     } finally {
       setSchedulingBusy(false);
     }
@@ -510,6 +602,11 @@ export default function GroupDetailPage() {
       });
       setEditingSuggestion(null);
       await load();
+      celebrate({
+        title: 'Idea actualizada',
+        message: 'Los cambios ya están visibles para todo el grupo.',
+        emoji: '✏️',
+      });
     } catch (e: unknown) {
       const msg =
         e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : 'No se pudo guardar';
@@ -520,44 +617,51 @@ export default function GroupDetailPage() {
   }
 
   return (
-    <div className="convos-gradient mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-5 py-6">
+    <div className="convos-gradient mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 overflow-x-hidden px-4 py-6 sm:px-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <Link href="/app" className="text-sm font-medium text-violet-600/90 hover:underline">
+          <Link href="/app" className="text-sm font-medium text-red-400/90 hover:underline">
             ← Dashboard
           </Link>
-          <h1 className="mt-1 bg-gradient-to-r from-violet-700 to-cyan-600 bg-clip-text text-2xl font-bold tracking-tight text-transparent">
+          <h1 className="mt-1 bg-gradient-to-r from-white to-zinc-400 bg-clip-text text-2xl font-bold tracking-tight text-transparent">
             {loading ? '…' : groupName || 'Grupo'}
           </h1>
         </div>
-        <button type="button" className="convos-btn-ghost px-4 py-2 text-sm" onClick={() => setShowPlanForm((v) => !v)}>
-          {showPlanForm ? 'Cerrar formulario' : 'Personalizar plan'}
+        <button
+          type="button"
+          className="convos-btn-ghost px-4 py-2 text-sm"
+          onClick={() => setShowPlanForm((v) => !v)}
+        >
+          {showPlanForm ? 'Ocultar formulario' : 'Plan a medida (fecha y título)'}
         </button>
       </header>
 
-      {error ? <div className="rounded-2xl bg-red-50 p-4 text-sm text-red-700">{error}</div> : null}
+      {error ? (
+        <div className="rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm text-red-200">{error}</div>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <section className="convos-card p-6 lg:col-span-2">
-          <h2 className="text-sm font-bold text-slate-800">Planes</h2>
-          <p className="mt-1 text-sm text-slate-600">Toca un plan para ver detalle y validar con foto + GPS.</p>
+          <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-100">Planes del grupo</h2>
+          <p className="mt-1 text-sm text-slate-600 dark:text-zinc-400">
+            Abajo están los que ya tienen fecha. Arriba, las ideas sin fecha hasta que las agendéis.
+          </p>
 
-          <div className="mt-5 rounded-2xl border border-amber-200/80 bg-gradient-to-br from-amber-50/90 via-white/70 to-orange-50/50 p-4 ring-1 ring-amber-100/70">
-            <h3 className="text-sm font-bold text-amber-950">Planeados pero sin fecha</h3>
-            <p className="mt-1 text-xs text-amber-900/80">
-              Propuestas del grupo sin día ni lugar obligatorio. Cuando quieras llevarlas a cabo, agenda fecha y ubicación y se
-              creará el plan.
+          <div className="mt-5 rounded-2xl border border-amber-500/25 bg-gradient-to-br from-amber-950/35 via-zinc-950/40 to-zinc-950/50 p-4 ring-1 ring-amber-500/15">
+            <h3 className="text-sm font-bold text-amber-100">Planeados pero sin fecha</h3>
+            <p className="mt-1 text-xs text-amber-200/90">
+              Propuestas del grupo sin fecha. Cuando quieras llevarlas a cabo, agenda día y hora y se creará el plan.
             </p>
             {suggestions === null ? (
-              <p className="mt-2 text-sm text-amber-900/70">Cargando…</p>
+              <p className="mt-2 text-sm text-amber-300/80">Cargando…</p>
             ) : suggestions.length === 0 ? (
-              <p className="mt-2 text-sm text-amber-900/70">Aún no hay ideas. Añade la primera abajo.</p>
+              <p className="mt-2 text-sm text-amber-300/80">Aún no hay ideas. Añade la primera abajo.</p>
             ) : (
               <ul className="mt-3 space-y-2">
                 {suggestions.map((s) => (
                   <li
                     key={s.id}
-                    className="rounded-xl border border-amber-100/90 bg-white/80 px-3 py-2 text-sm shadow-sm ring-1 ring-white/80"
+                    className="rounded-xl border border-amber-500/20 bg-white/85 dark:bg-white/[0.06] px-3 py-2 text-sm shadow-sm ring-1 ring-white/10"
                   >
                     {editingSuggestion?.id === s.id ? (
                       <form className="grid gap-2" onSubmit={saveEditSug}>
@@ -596,16 +700,16 @@ export default function GroupDetailPage() {
                       </form>
                     ) : (
                       <>
-                        <div className="font-semibold text-slate-800">{s.title}</div>
-                        <div className="text-xs text-slate-500">
+                        <div className="font-semibold text-slate-900 dark:text-zinc-100">{s.title}</div>
+                        <div className="text-xs text-slate-500 dark:text-zinc-500">
                           {PLAN_TYPES.find((p) => p.value === s.type)?.label ?? s.type} · Propuesta de{' '}
                           {s.creator.name?.trim() || s.creator.email.split('@')[0]}
                         </div>
-                        {s.note?.trim() ? <p className="mt-1 text-xs text-slate-600">{s.note}</p> : null}
+                        {s.note?.trim() ? <p className="mt-1 text-xs text-slate-600 dark:text-zinc-400">{s.note}</p> : null}
                         <div className="mt-2 flex flex-wrap gap-2">
                           <button
                             type="button"
-                            className="rounded-full bg-violet-600 px-3 py-1 text-xs font-semibold text-white hover:bg-violet-700"
+                            className="rounded-full bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-500"
                             onClick={() => openSchedule(s)}
                           >
                             Agendar con fecha
@@ -633,10 +737,10 @@ export default function GroupDetailPage() {
             )}
             {schedulingSuggestionId ? (
               <form
-                className="mt-4 grid gap-2 rounded-xl border border-violet-200 bg-violet-50/50 p-3"
+                className="mt-4 grid gap-2 rounded-xl border border-slate-200 dark:border-white/12 bg-red-950/15 p-3"
                 onSubmit={submitScheduleForm}
               >
-                <div className="text-xs font-bold text-violet-900">Agendar esta idea</div>
+                <div className="text-xs font-bold text-red-200">Agendar esta idea</div>
                 <label className="convos-label text-xs">
                   <span>Fecha y hora</span>
                   <input
@@ -647,38 +751,23 @@ export default function GroupDetailPage() {
                     required
                   />
                 </label>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <label className="convos-label text-xs">
-                    <span>Lugar (nombre)</span>
-                    <input className="convos-input mt-0.5" value={schPlace} onChange={(e) => setSchPlace(e.target.value)} required />
-                  </label>
-                  <label className="convos-label text-xs">
-                    <span>Dirección</span>
-                    <input className="convos-input mt-0.5" value={schAddr} onChange={(e) => setSchAddr(e.target.value)} />
-                  </label>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  <label className="convos-label text-xs">
-                    <span>Lat</span>
-                    <input className="convos-input mt-0.5 font-mono" value={schLat} onChange={(e) => setSchLat(e.target.value)} required />
-                  </label>
-                  <label className="convos-label text-xs">
-                    <span>Lng</span>
-                    <input className="convos-input mt-0.5 font-mono" value={schLng} onChange={(e) => setSchLng(e.target.value)} required />
-                  </label>
-                  <label className="convos-label text-xs">
-                    <span>Radio (m)</span>
-                    <input className="convos-input mt-0.5" value={schRadius} onChange={(e) => setSchRadius(e.target.value)} />
-                  </label>
-                </div>
-                <button type="button" className="convos-btn-ghost h-8 w-fit px-3 text-xs" onClick={() => void fillScheduleLocation()}>
-                  Usar mi ubicación
-                </button>
-                <p className="text-[10px] text-slate-500">
-                  Si falla el GPS, se intentan usar las últimas coordenadas guardadas en este dispositivo.
-                </p>
+                <p className="text-[11px] text-red-200/80">Opcional: un texto corto para recordar el sitio (café, casa de…).</p>
+                <label className="convos-label text-xs">
+                  <span>Lugar (opcional)</span>
+                  <input
+                    className="convos-input mt-0.5 min-h-[40px]"
+                    value={schVenueLabel}
+                    onChange={(e) => setSchVenueLabel(e.target.value)}
+                    placeholder="Ej. Parque, casa de Ana…"
+                    maxLength={200}
+                  />
+                </label>
                 <div className="flex flex-wrap gap-2">
-                  <button type="submit" className="convos-btn-primary h-9 px-4 text-xs" disabled={schedulingBusy}>
+                  <button
+                    type="submit"
+                    className="convos-btn-primary h-10 min-h-[44px] px-4 text-xs disabled:opacity-60"
+                    disabled={schedulingBusy}
+                  >
                     {schedulingBusy ? 'Creando plan…' : 'Crear plan y abrir'}
                   </button>
                   <button type="button" className="convos-btn-ghost h-9 px-4 text-xs" onClick={() => setSchedulingSuggestionId(null)}>
@@ -687,8 +776,8 @@ export default function GroupDetailPage() {
                 </div>
               </form>
             ) : null}
-            <form className="mt-4 grid gap-2 border-t border-amber-200/60 pt-4" onSubmit={submitBacklog}>
-              <div className="text-xs font-bold text-amber-950">Nueva idea</div>
+            <form className="mt-4 grid gap-2 border-t border-amber-500/20 pt-4" onSubmit={submitBacklog}>
+              <div className="text-xs font-bold text-amber-100">Nueva idea</div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <label className="convos-label text-xs">
                   <span>Título</span>
@@ -732,27 +821,24 @@ export default function GroupDetailPage() {
             </form>
           </div>
 
-          <div className="mt-4 rounded-2xl border border-fuchsia-200/70 bg-gradient-to-br from-fuchsia-50/90 via-white/60 to-violet-50/80 p-4 ring-1 ring-white/70">
+          <div className="mt-4 rounded-2xl border border-red-500/20 bg-gradient-to-br from-red-950/40 via-zinc-950/50 to-black/40 p-4 ring-1 ring-white/10">
             <div className="flex flex-wrap items-start gap-3">
               <ConvosPartyGif className="hidden w-[140px] shrink-0 sm:block" />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-sm font-bold text-slate-800">Plan en 1 toque</h3>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-100">Plan en 1 toque</h3>
                   <span className="convos-wiggle text-lg" aria-hidden>
                     ⚡
                   </span>
                 </div>
-                <p className="mt-1 text-xs text-slate-600">
-                  Un solo toque crea el plan. La primera vez pide ubicación; después reutiliza coordenadas guardadas solo en
-                  este dispositivo (7 días).
-                </p>
+                <p className="mt-1 text-xs text-slate-600 dark:text-zinc-400">Crea un plan con fecha sugerida y una etiqueta de lugar opcional.</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {QUICK_PLAN_PRESETS.map((p) => (
                     <button
                       key={p.id}
                       type="button"
                       disabled={!!quickBusy || !token}
-                      className="inline-flex items-center gap-2 rounded-2xl border border-violet-200/90 bg-white/90 px-3 py-2 text-left text-sm font-semibold text-violet-900 shadow-sm transition-all hover:border-fuchsia-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 dark:border-white/12 bg-white/90 dark:bg-white/[0.07] px-3 py-2 text-left text-sm font-semibold text-red-200 shadow-sm transition-all hover:border-red-400/35 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
                       onClick={() => void createQuickPlan(p)}
                     >
                       <span className="text-lg" aria-hidden>
@@ -767,14 +853,14 @@ export default function GroupDetailPage() {
           </div>
 
           {showPlanForm ? (
-            <form className="mt-4 grid gap-3 rounded-2xl border border-violet-100 bg-violet-50/40 p-4" onSubmit={submitPlan}>
+            <form className="mt-4 grid gap-3 rounded-2xl border border-slate-200/80 dark:border-white/10 bg-red-950/20 p-4" onSubmit={submitPlan}>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="convos-label">
-                  <span className="font-medium text-slate-700">Título</span>
+                  <span className="font-medium text-slate-700 dark:text-zinc-300">Título</span>
                   <input className="convos-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Cena en…" required />
                 </label>
                 <label className="convos-label">
-                  <span className="font-medium text-slate-700">Tipo</span>
+                  <span className="font-medium text-slate-700 dark:text-zinc-300">Tipo</span>
                   <select className="convos-input" value={planType} onChange={(e) => setPlanType(e.target.value as PlanType)}>
                     {PLAN_TYPES.map((p) => (
                       <option key={p.value} value={p.value}>
@@ -785,7 +871,7 @@ export default function GroupDetailPage() {
                 </label>
               </div>
 
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-zinc-500">
                 El tipo solo sirve para categorizar en rankings y filtros; no cambia el título automáticamente.
               </p>
               <div className="flex flex-wrap gap-2">
@@ -793,7 +879,7 @@ export default function GroupDetailPage() {
                   <button
                     key={s}
                     type="button"
-                    className="rounded-full border border-violet-200/80 bg-white/70 px-3 py-1 text-xs font-semibold text-violet-800 shadow-sm transition-all hover:bg-white"
+                    className="rounded-full border border-slate-200 dark:border-white/12 bg-white/90 dark:bg-white/[0.07] px-3 py-1 text-xs font-semibold text-red-300 shadow-sm transition-all hover:bg-slate-100 dark:hover:bg-white/12"
                     onClick={() => setTitle((prev) => (prev.trim() ? prev : s))}
                   >
                     {s}
@@ -801,7 +887,7 @@ export default function GroupDetailPage() {
                 ))}
                 <button
                   type="button"
-                  className="rounded-full border border-slate-200 bg-white/60 px-3 py-1 text-xs font-semibold text-slate-700 transition-all hover:bg-white"
+                  className="rounded-full border border-slate-200 dark:border-white/12 bg-white/80 dark:bg-white/[0.05] px-3 py-1 text-xs font-semibold text-slate-700 dark:text-zinc-300 transition-all hover:bg-slate-100 dark:hover:bg-white/12"
                   onClick={() => setTitle('')}
                 >
                   Limpiar
@@ -809,7 +895,7 @@ export default function GroupDetailPage() {
               </div>
 
               <label className="convos-label">
-                <span className="font-medium text-slate-700">Fecha y hora</span>
+                <span className="font-medium text-slate-700 dark:text-zinc-300">Fecha y hora</span>
                 <input
                   className="convos-input"
                   type="datetime-local"
@@ -829,7 +915,7 @@ export default function GroupDetailPage() {
                   <button
                     key={p.label}
                     type="button"
-                    className="rounded-full border border-violet-200/80 bg-white/70 px-3 py-1 text-xs font-semibold text-violet-800 shadow-sm transition-all hover:bg-white"
+                    className="rounded-full border border-slate-200 dark:border-white/12 bg-white/90 dark:bg-white/[0.07] px-3 py-1 text-xs font-semibold text-red-300 shadow-sm transition-all hover:bg-slate-100 dark:hover:bg-white/12"
                     onClick={() => {
                       const d = new Date();
                       if ('addDays' in p) d.setDate(d.getDate() + (p.addDays ?? 0));
@@ -850,100 +936,190 @@ export default function GroupDetailPage() {
                 ))}
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="convos-label">
-                  <span className="font-medium text-slate-700">Lugar (nombre)</span>
-                  <input className="convos-input" value={placeName} onChange={(e) => setPlaceName(e.target.value)} required />
-                </label>
-                <label className="convos-label">
-                  <span className="font-medium text-slate-700">Dirección</span>
-                  <input className="convos-input" value={placeAddress} onChange={(e) => setPlaceAddress(e.target.value)} />
-                </label>
-              </div>
+              <label className="convos-label">
+                <span className="font-medium text-slate-700 dark:text-zinc-300">Lugar (opcional)</span>
+                <input
+                  className="convos-input min-h-[44px]"
+                  value={venueLabel}
+                  onChange={(e) => setVenueLabel(e.target.value)}
+                  placeholder="Ej. Café Central, casa de…"
+                  maxLength={200}
+                />
+              </label>
+              <p className="text-xs text-slate-500 dark:text-zinc-500">Solo texto para el grupo; no guardamos coordenadas ni mapas.</p>
 
               <div className="flex flex-wrap gap-2">
                 {PLACE_SUGGESTIONS.map((s) => (
                   <button
                     key={s}
                     type="button"
-                    className="rounded-full border border-slate-200 bg-white/60 px-3 py-1 text-xs font-semibold text-slate-700 transition-all hover:bg-white"
-                    onClick={() => setPlaceName((prev) => (prev.trim() ? prev : s))}
+                    className="min-h-[40px] rounded-full border border-slate-200 dark:border-white/12 bg-white/80 dark:bg-white/[0.05] px-3 py-2 text-xs font-semibold text-slate-700 dark:text-zinc-300 transition-all hover:bg-slate-100 dark:hover:bg-white/12"
+                    onClick={() => setVenueLabel((prev) => (prev.trim() ? prev : s))}
                   >
                     {s}
                   </button>
                 ))}
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-3">
-                <label className="convos-label">
-                  <span className="font-medium text-slate-700">Lat</span>
-                  <input className="convos-input font-mono" value={lat} onChange={(e) => setLat(e.target.value)} placeholder="6.2442" required />
-                </label>
-                <label className="convos-label">
-                  <span className="font-medium text-slate-700">Lng</span>
-                  <input className="convos-input font-mono" value={lng} onChange={(e) => setLng(e.target.value)} placeholder="-75.5812" required />
-                </label>
-                <label className="convos-label">
-                  <span className="font-medium text-slate-700">Radio (m)</span>
-                  <input className="convos-input" value={radiusM} onChange={(e) => setRadiusM(e.target.value)} inputMode="numeric" />
-                </label>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
+              <div className="rounded-2xl border border-dashed border-slate-300 dark:border-white/15 bg-slate-50/50 dark:bg-white/[0.03] p-4">
+                <div className="text-sm font-bold text-slate-900 dark:text-zinc-100">Fotos del plan (opcional)</div>
+                <p className="mt-1 text-xs text-slate-500 dark:text-zinc-500">
+                  Sube archivos o usa la cámara. Hasta {MAX_PLAN_GALLERY} entre fotos y PDF; el orden es el de la galería.
+                </p>
+                {canPlanGalleryCamera ? (
+                  <div className="mt-3 grid gap-2">
+                    <video
+                      ref={planGalleryVideoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="aspect-video w-full max-w-md rounded-xl bg-slate-200 object-cover dark:bg-zinc-800"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="convos-btn-primary min-h-[44px] px-3 text-xs"
+                        onClick={() => void requestPlanGalleryCamera()}
+                      >
+                        Activar cámara
+                      </button>
+                      <button
+                        type="button"
+                        className="convos-btn-ghost min-h-[44px] px-3 text-xs"
+                        onClick={() => flipPlanGalleryCamera()}
+                      >
+                        Cambiar cámara
+                      </button>
+                      <button
+                        type="button"
+                        className="convos-btn-primary min-h-[44px] px-3 text-xs"
+                        disabled={!planGalleryCamReady || savingPlan || planGallerySlots.length >= MAX_PLAN_GALLERY}
+                        onClick={() => void capturePlanGalleryPhoto()}
+                      >
+                        Añadir foto
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <input
+                  ref={planGalleryFileRef}
+                  type="file"
+                  accept={PLAN_GALLERY_ACCEPT}
+                  multiple
+                  className="hidden"
+                  onChange={onPlanGalleryFiles}
+                />
                 <button
                   type="button"
-                  className="convos-btn-ghost h-10 px-4 text-xs"
-                  onClick={() => void fillMyLocation()}
+                  className="convos-btn-ghost mt-3 h-11 w-full max-w-md text-sm"
+                  disabled={savingPlan || planGallerySlots.length >= MAX_PLAN_GALLERY}
+                  onClick={() => planGalleryFileRef.current?.click()}
                 >
-                  Usar mi ubicación (lat/lng)
+                  Adjuntar desde el dispositivo… ({planGallerySlots.length}/{MAX_PLAN_GALLERY})
                 </button>
-                {['150', '250', '400', '800'].map((r) => (
-                  <button
-                    key={r}
-                    type="button"
-                    className="rounded-full border border-violet-200/80 bg-white/70 px-3 py-1 text-xs font-semibold text-violet-800 shadow-sm transition-all hover:bg-white"
-                    onClick={() => setRadiusM(r)}
-                  >
-                    Radio {r}m
-                  </button>
-                ))}
+                {planGallerySlots.length ? (
+                  <ul className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {planGallerySlots.map((slot, idx) => (
+                      <li
+                        key={slot.key}
+                        className="overflow-hidden rounded-xl border border-slate-200/80 dark:border-white/10 bg-white/80 dark:bg-white/[0.06]"
+                      >
+                        <div className="relative aspect-video bg-slate-100 dark:bg-zinc-900">
+                          {planGalleryPdf(slot) ? (
+                            <div className="flex h-full items-center justify-center text-xs font-semibold text-slate-600 dark:text-zinc-400">
+                              PDF
+                            </div>
+                          ) : (
+                            <Image
+                              src={slot.previewUrl}
+                              alt=""
+                              width={400}
+                              height={225}
+                              unoptimized
+                              className="h-full w-full object-cover"
+                            />
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between gap-1 p-1.5">
+                          <span className="truncate text-[10px] text-slate-500 dark:text-zinc-500">{idx + 1}</span>
+                          <button
+                            type="button"
+                            className="text-[10px] font-semibold text-red-400"
+                            disabled={savingPlan}
+                            onClick={() => removePlanGallerySlot(slot.key)}
+                          >
+                            Quitar
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
 
-              <p className="text-xs text-slate-500">
-                La validación GPS usa este radio respecto al lugar. Las coordenadas deben coincidir con el sitio real.
-              </p>
-              <button type="submit" className="convos-btn-primary h-11 w-full sm:w-auto disabled:opacity-60" disabled={savingPlan}>
-                {savingPlan ? 'Guardando…' : 'Crear plan'}
+              <button
+                type="submit"
+                className="convos-btn-primary h-12 min-h-[48px] w-full sm:w-auto disabled:opacity-60"
+                disabled={savingPlan}
+              >
+                {savingPlan ? 'Creando…' : 'Crear plan'}
               </button>
+              <canvas ref={planGalleryCanvasRef} className="hidden" />
             </form>
           ) : null}
 
           <ul className="mt-4 grid gap-2">
             {!plans?.length ? (
-              <li className="rounded-2xl border border-dashed border-violet-200/80 bg-white/50 px-4 py-8 text-center text-sm text-slate-600">
-                No hay planes. Usa «Plan en 1 toque» arriba o «Personalizar plan».
+              <li className="rounded-2xl border border-dashed border-slate-200 dark:border-white/12 bg-slate-50/90 dark:bg-white/[0.045] px-4 py-8 text-center text-sm text-slate-600 dark:text-zinc-400">
+                <p className="font-medium text-slate-700 dark:text-zinc-300">Aún no hay planes en este grupo.</p>
+                <p className="mt-2 text-xs text-slate-500 dark:text-zinc-500">
+                  Usa un preset rápido o «Plan a medida» para elegir fecha y, si quieres, un texto de lugar.
+                </p>
               </li>
             ) : (
               plans.map((p) => (
                 <li key={p.id}>
                   <Link
                     href={`/app/plans/${p.id}`}
-                    className="flex flex-col gap-1 rounded-2xl border border-white/80 bg-white/70 px-4 py-3 text-sm shadow-sm ring-1 ring-violet-100/60 transition-all hover:bg-white hover:shadow-md sm:flex-row sm:items-center sm:justify-between"
+                    className="flex flex-col gap-2 rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white/85 dark:bg-white/[0.06] px-4 py-3 text-sm shadow-sm ring-1 ring-red-500/15 transition-all hover:bg-slate-100 dark:hover:bg-white/12 hover:shadow-md sm:flex-row sm:items-center sm:justify-between"
                   >
-                    <div>
-                      <div className="font-semibold text-slate-800">{p.title}</div>
-                      <div className="text-xs text-slate-500">{p.place?.name ?? 'Lugar'} · {formatWhen(p.scheduledAt)}</div>
+                    {p.galleryPhotos?.length ? (
+                      <div className="flex shrink-0 gap-1 sm:order-first">
+                        {p.galleryPhotos.slice(0, 4).map((g) => {
+                          const src = resolvePublicAssetUrl(g.photo.publicUrl);
+                          const pdf = g.photo.mimeType === 'application/pdf';
+                          return (
+                            <div
+                              key={g.id}
+                              className="h-14 w-14 overflow-hidden rounded-lg bg-slate-200 dark:bg-zinc-800 sm:h-16 sm:w-16"
+                            >
+                              {pdf && src ? (
+                                <div className="flex h-full items-center justify-center text-[10px] font-bold text-slate-500">PDF</div>
+                              ) : src ? (
+                                // eslint-disable-next-line @next/next/no-img-element -- URL dinámica
+                                <img src={src} alt="" className="h-full w-full object-cover" />
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-slate-900 dark:text-zinc-100">{p.title}</div>
+                      <div className="text-xs text-slate-500 dark:text-zinc-500">
+                        {p.venueLabel?.trim() || 'Sin lugar'} · {formatWhen(p.scheduledAt)}
+                      </div>
                     </div>
                     <span
                       className={`inline-flex w-fit rounded-full px-2.5 py-0.5 text-xs font-semibold ${
                         p.status === 'scheduled'
-                          ? 'bg-emerald-100 text-emerald-800'
+                          ? 'bg-emerald-500/15 text-emerald-200'
                           : p.status === 'cancelled'
-                            ? 'bg-slate-200 text-slate-700'
-                            : 'bg-violet-100 text-violet-800'
+                            ? 'bg-slate-200 dark:bg-zinc-700 text-slate-700 dark:text-zinc-300'
+                            : 'bg-red-500/15 text-red-200'
                       }`}
                     >
-                      {p.status}
+                      {planStatusEs(p.status)}
                     </span>
                   </Link>
                 </li>
@@ -954,35 +1130,35 @@ export default function GroupDetailPage() {
 
         <aside className="flex flex-col gap-4">
           <div className="convos-card p-5">
-            <h2 className="text-sm font-bold text-slate-800">Personas</h2>
-            <p className="mt-1 text-xs text-slate-600">Quién forma parte de este grupo.</p>
+            <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-100">Personas</h2>
+            <p className="mt-1 text-xs text-slate-600 dark:text-zinc-400">Quién forma parte de este grupo.</p>
             <ul className="mt-3 space-y-3">
               {members === null ? (
-                <li className="text-sm text-slate-500">Cargando…</li>
+                <li className="text-sm text-slate-500 dark:text-zinc-500">Cargando…</li>
               ) : !members.length ? (
-                <li className="text-sm text-slate-500">No hay personas listadas.</li>
+                <li className="text-sm text-slate-500 dark:text-zinc-500">No hay personas listadas.</li>
               ) : (
                 members.map((m) => {
                   const src = resolvePublicAssetUrl(m.user.avatarUrl);
                   const label = m.user.name?.trim() || m.user.email.split('@')[0];
                   return (
-                    <li key={m.userId} className="flex gap-3 rounded-xl border border-white/80 bg-white/60 p-2.5 ring-1 ring-violet-100/50">
-                      <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-violet-100">
+                    <li key={m.userId} className="flex gap-3 rounded-xl border border-slate-200/80 dark:border-white/10 bg-white/80 dark:bg-white/[0.05] p-2.5 ring-1 ring-white/10">
+                      <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-red-500/10">
                         {src ? (
                           <Image src={src} alt="" fill className="object-cover" unoptimized sizes="44px" />
                         ) : (
-                          <div className="flex h-full items-center justify-center text-lg text-violet-400">👤</div>
+                          <div className="flex h-full items-center justify-center text-lg text-red-400/50">👤</div>
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="truncate font-semibold text-slate-800">{label}</div>
-                        <div className="truncate text-xs text-slate-500">{m.user.email}</div>
+                        <div className="truncate font-semibold text-slate-900 dark:text-zinc-100">{label}</div>
+                        <div className="truncate text-xs text-slate-500 dark:text-zinc-500">{m.user.email}</div>
                         {m.user.bio?.trim() ? (
-                          <p className="mt-1 line-clamp-2 text-xs text-slate-600">{m.user.bio}</p>
+                          <p className="mt-1 line-clamp-2 text-xs text-slate-600 dark:text-zinc-400">{m.user.bio}</p>
                         ) : null}
                         <span
                           className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-                            m.role === 'admin' ? 'bg-violet-200 text-violet-900' : 'bg-slate-200 text-slate-700'
+                            m.role === 'admin' ? 'bg-red-500/25 text-red-100' : 'bg-slate-200 dark:bg-zinc-700 text-slate-700 dark:text-zinc-300'
                           }`}
                         >
                           {m.role === 'admin' ? 'Admin' : 'Miembro'}
@@ -996,8 +1172,8 @@ export default function GroupDetailPage() {
           </div>
 
           <div className="convos-card p-5">
-            <h2 className="text-sm font-bold text-slate-800">Invitar</h2>
-            <p className="mt-1 text-xs text-slate-600">Genera un enlace (solo admins) y compártelo.</p>
+            <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-100">Invitar</h2>
+            <p className="mt-1 text-xs text-slate-600 dark:text-zinc-400">Genera un enlace (solo admins) y compártelo.</p>
             <button
               type="button"
               className="convos-btn-ghost mt-3 w-full text-sm"
@@ -1012,18 +1188,18 @@ export default function GroupDetailPage() {
           </div>
 
           <div className="convos-card p-5">
-            <h2 className="text-sm font-bold text-slate-800">Ranking (7 días)</h2>
+            <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-100">Ranking (7 días)</h2>
             <ol className="mt-3 space-y-2 text-sm">
               {!leaderboard?.length ? (
-                <li className="text-slate-500">Sin puntos aún esta semana.</li>
+                <li className="text-slate-500 dark:text-zinc-500">Sin puntos aún esta semana.</li>
               ) : (
                 leaderboard.slice(0, 8).map((row, i) => (
                   <li key={row.user.id} className="flex items-center justify-between gap-2">
-                    <span className="text-slate-700">
-                      <span className="mr-2 font-mono text-xs text-violet-600">{i + 1}.</span>
+                    <span className="text-slate-700 dark:text-zinc-300">
+                      <span className="mr-2 font-mono text-xs text-red-400">{i + 1}.</span>
                       {row.user.name ?? row.user.email}
                     </span>
-                    <span className="font-semibold text-violet-800">{row.weekPoints} pts</span>
+                    <span className="font-semibold text-red-300">{row.weekPoints} pts</span>
                   </li>
                 ))
               )}
@@ -1031,8 +1207,8 @@ export default function GroupDetailPage() {
           </div>
 
           <div className="convos-card p-5">
-            <h2 className="text-sm font-bold text-slate-800">Retos activos</h2>
-            <ul className="mt-2 space-y-2 text-sm text-slate-600">
+            <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-100">Retos activos</h2>
+            <ul className="mt-2 space-y-2 text-sm text-slate-600 dark:text-zinc-400">
               {!challenges?.length ? (
                 <li>No hay retos visibles ahora.</li>
               ) : (
@@ -1047,14 +1223,14 @@ export default function GroupDetailPage() {
                   const cur = r.progress?.current ?? 0;
                   const tgt = r.progress?.target;
                   return (
-                    <li key={r.id} className="rounded-xl bg-white/60 px-3 py-2 ring-1 ring-violet-100/50">
-                      <div className="font-medium text-slate-800">{title}</div>
+                    <li key={r.id} className="rounded-xl bg-white/80 dark:bg-white/[0.05] px-3 py-2 ring-1 ring-white/10">
+                      <div className="font-medium text-slate-900 dark:text-zinc-100">{title}</div>
                       {tgt != null ? (
-                        <div className="mt-1 text-xs text-violet-700">
+                        <div className="mt-1 text-xs text-red-400">
                           Progreso: {cur}/{tgt} · {r.status}
                         </div>
                       ) : (
-                        <div className="mt-1 text-xs text-slate-500">{r.status}</div>
+                        <div className="mt-1 text-xs text-slate-500 dark:text-zinc-500">{r.status}</div>
                       )}
                     </li>
                   );
@@ -1066,37 +1242,43 @@ export default function GroupDetailPage() {
       </div>
 
       <section className="convos-card p-6">
-        <h2 className="text-sm font-bold text-slate-800">Fotos del grupo (validaciones)</h2>
-        <p className="mt-1 text-sm text-slate-600">
+        <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-100">Fotos del grupo (validaciones)</h2>
+        <p className="mt-1 text-sm text-slate-600 dark:text-zinc-400">
           Las fotos que cada miembro envió al validar un plan. Puedes verlas aunque la hayas subido otra persona.
         </p>
         {validationPhotos === null ? (
-          <p className="mt-4 text-sm text-slate-500">Cargando…</p>
+          <p className="mt-4 text-sm text-slate-500 dark:text-zinc-500">Cargando…</p>
         ) : !validationPhotos.length ? (
-          <p className="mt-4 text-sm text-slate-600">Aún no hay fotos de validación en este grupo.</p>
+          <p className="mt-4 text-sm text-slate-600 dark:text-zinc-400">Aún no hay fotos de validación en este grupo.</p>
         ) : (
           <ul className="mt-4 grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
             {validationPhotos.map((v) => {
               const src = resolvePublicAssetUrl(v.photo.publicUrl);
               const who = v.user.name?.trim() || v.user.email.split('@')[0];
+              const isPdf = v.photo.mimeType === 'application/pdf';
               return (
                 <li
                   key={v.id}
-                  className="overflow-hidden rounded-2xl border border-violet-100 bg-white/70 shadow-sm ring-1 ring-violet-50"
+                  className="overflow-hidden rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white/85 dark:bg-white/[0.06] shadow-sm ring-1 ring-white/5"
                 >
                   <Link href={`/app/plans/${v.plan.id}`} className="block">
-                    <div className="relative aspect-square overflow-hidden bg-slate-100">
-                      {src ? (
+                    <div className="relative aspect-square overflow-hidden bg-slate-200 dark:bg-zinc-800">
+                      {isPdf && src ? (
+                        <div className="flex h-full flex-col items-center justify-center gap-1 p-2 text-center text-xs font-semibold text-slate-600 dark:text-zinc-300">
+                          <span className="text-2xl">📄</span>
+                          PDF
+                        </div>
+                      ) : src ? (
                         // eslint-disable-next-line @next/next/no-img-element -- URLs dinámicas (API / uploads)
                         <img src={src} alt="" className="absolute inset-0 h-full w-full object-cover" />
                       ) : (
-                        <div className="flex h-full items-center justify-center text-xs text-slate-500">Sin imagen</div>
+                        <div className="flex h-full items-center justify-center text-xs text-slate-500 dark:text-zinc-500">Sin imagen</div>
                       )}
                     </div>
                     <div className="p-2 text-xs">
-                      <div className="line-clamp-1 font-semibold text-slate-800">{v.plan.title}</div>
-                      <div className="text-slate-600">Validado por {who}</div>
-                      <div className="mt-0.5 text-[10px] font-semibold uppercase text-slate-400">
+                      <div className="line-clamp-1 font-semibold text-slate-900 dark:text-zinc-100">{v.plan.title}</div>
+                      <div className="text-slate-600 dark:text-zinc-400">Validado por {who}</div>
+                      <div className="mt-0.5 text-[10px] font-semibold uppercase text-slate-500 dark:text-zinc-500">
                         {v.status === 'accepted' ? 'Aceptada' : v.status === 'rejected' ? 'Rechazada' : v.status === 'pending_review' ? 'En revisión' : v.status}
                       </div>
                     </div>
@@ -1109,27 +1291,27 @@ export default function GroupDetailPage() {
       </section>
 
       <section className="convos-card p-6">
-        <h2 className="text-sm font-bold text-slate-800">Timeline del grupo</h2>
-        <p className="mt-1 text-sm text-slate-600">Validaciones y misiones recientes (solo para miembros).</p>
+        <h2 className="text-sm font-bold text-slate-900 dark:text-zinc-100">Timeline del grupo</h2>
+        <p className="mt-1 text-sm text-slate-600 dark:text-zinc-400">Validaciones y misiones recientes (solo para miembros).</p>
         <ul className="mt-4 space-y-3">
           {!feed?.length ? (
-            <li className="rounded-2xl border border-dashed border-violet-200/80 bg-white/50 px-4 py-8 text-center text-sm text-slate-600">
+            <li className="rounded-2xl border border-dashed border-slate-200 dark:border-white/12 bg-slate-50/90 dark:bg-white/[0.045] px-4 py-8 text-center text-sm text-slate-600 dark:text-zinc-400">
               Aún no hay actividad en el feed. Cuando alguien valide un plan, aparecerá aquí.
             </li>
           ) : (
             feed.map((item) => {
               const line = formatFeedLine(item);
               return (
-                <li key={item.id} className="rounded-2xl border border-white/80 bg-white/70 px-4 py-3 text-sm shadow-sm ring-1 ring-violet-100/50">
+                <li key={item.id} className="rounded-2xl border border-slate-200/90 dark:border-white/80 bg-white/85 dark:bg-white/[0.06] px-4 py-3 text-sm shadow-sm ring-1 ring-white/10">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                      <div className="font-medium text-slate-800">{line.title}</div>
-                      {line.sub ? <div className="text-xs text-slate-500">{line.sub}</div> : null}
+                      <div className="font-medium text-slate-900 dark:text-zinc-100">{line.title}</div>
+                      {line.sub ? <div className="text-xs text-slate-500 dark:text-zinc-500">{line.sub}</div> : null}
                     </div>
                     <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
-                      <span className="text-xs text-slate-400">{formatWhen(item.occurredAt)}</span>
+                      <span className="text-xs text-slate-500 dark:text-zinc-500">{formatWhen(item.occurredAt)}</span>
                       {item.planId ? (
-                        <Link href={`/app/plans/${item.planId}`} className="text-xs font-semibold text-violet-700 hover:underline">
+                        <Link href={`/app/plans/${item.planId}`} className="text-xs font-semibold text-red-400 hover:underline">
                           Ver plan
                         </Link>
                       ) : null}

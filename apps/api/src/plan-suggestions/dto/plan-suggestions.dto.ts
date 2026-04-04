@@ -1,19 +1,13 @@
-import { Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
   IsEnum,
   IsISO8601,
-  IsInt,
   IsOptional,
   IsString,
-  Max,
   MaxLength,
-  Min,
-  ValidateNested,
 } from 'class-validator';
 import { PlanType } from '@prisma/client';
-import { PlaceInputDto } from '../../plans/dto/plans.dto';
 
 export class CreatePlanSuggestionDto {
   @IsString()
@@ -49,15 +43,10 @@ export class SchedulePlanSuggestionDto {
   @IsISO8601()
   scheduledAt!: string;
 
-  @ValidateNested()
-  @Type(() => PlaceInputDto)
-  place!: PlaceInputDto;
-
   @IsOptional()
-  @IsInt()
-  @Min(50)
-  @Max(5000)
-  locationRadiusM?: number;
+  @IsString()
+  @MaxLength(200)
+  venueLabel?: string;
 
   @IsOptional()
   @IsBoolean()

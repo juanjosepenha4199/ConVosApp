@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
+import { AppProviders } from './providers';
 import './globals.css';
 
 const geistSans = Geist({
@@ -17,15 +18,20 @@ export const metadata: Metadata = {
   description: 'Planes reales con validación, gamificación y recuerdos.',
 };
 
+const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem('convos-theme');if(t==='light'){document.documentElement.classList.remove('dark');}else{document.documentElement.classList.add('dark');}}catch(e){document.documentElement.classList.add('dark');}})();`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="es" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased light`}>
-      <body className="min-h-full flex flex-col bg-[#faf8ff] text-zinc-800 selection:bg-violet-200/60 selection:text-violet-900">
-        {children}
+    <html lang="es" suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
+      <body className="flex min-h-full max-w-[100vw] flex-col overflow-x-hidden">
+        <AppProviders>{children}</AppProviders>
       </body>
     </html>
   );

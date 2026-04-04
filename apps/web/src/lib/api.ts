@@ -2,6 +2,8 @@
  * Por defecto `/api/v1`: misma origen que la web; Next reenvía a Nest (next.config rewrites).
  * Producción: `https://tu-api.up.railway.app/api/v1` (si falta `https://`, se asume https).
  */
+import { readAccessToken, readRefreshToken, writeTokens } from './auth-storage';
+
 function normalizeApiBaseUrl(raw: string | undefined): string {
   if (!raw?.trim()) return '/api/v1';
   let u = raw.replace(/\/$/, '').trim();
@@ -60,6 +62,38 @@ export function isAbortError(e: unknown): boolean {
   );
 }
 
+function authPathSkipsRefresh(path: string): boolean {
+  return (
+    path === '/auth/refresh' || path === '/auth/login' || path === '/auth/register' || path.startsWith('/auth/google')
+  );
+}
+
+/** POST /auth/refresh sin pasar por `request` (evita recursión). */
+async function fetchRefreshPair(refreshToken: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  });
+  const text = await res.text().catch(() => '');
+  if (!res.ok) {
+    let message = text || res.statusText;
+    const ct = res.headers.get('content-type') ?? '';
+    if (ct.includes('application/json') && text) {
+      try {
+        const j = JSON.parse(text) as { message?: string | string[]; error?: string };
+        if (Array.isArray(j.message)) message = j.message.join(', ');
+        else if (typeof j.message === 'string') message = j.message;
+        else if (typeof j.error === 'string') message = j.error;
+      } catch {
+        /* keep */
+      }
+    }
+    throw { status: res.status, message } satisfies ApiError;
+  }
+  return JSON.parse(text) as AuthResponse;
+}
+
 async function request<T>(
   path: string,
   opts?: {
@@ -68,14 +102,20 @@ async function request<T>(
     token?: string | null;
     signal?: AbortSignal;
   },
+  _didRefreshRetry = false,
 ): Promise<T> {
+  const passed = opts?.token;
+  const bearer =
+    typeof window !== 'undefined' ? (readAccessToken() ?? passed ?? null) : (passed ?? null);
+  const sentAuth = Boolean(bearer);
+
   let res: Response;
   try {
     res = await fetch(`${API_BASE_URL}${path}`, {
       method: opts?.method ?? 'GET',
       headers: {
         'content-type': 'application/json',
-        ...(opts?.token ? { authorization: `Bearer ${opts.token}` } : {}),
+        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
       },
       body: opts?.body ? JSON.stringify(opts.body) : undefined,
       signal: opts?.signal,
@@ -94,6 +134,25 @@ async function request<T>(
           ? `No se pudo conectar con el servidor. ${hint}`
           : raw,
     } satisfies ApiError;
+  }
+
+  if (
+    res.status === 401 &&
+    sentAuth &&
+    !_didRefreshRetry &&
+    typeof window !== 'undefined' &&
+    !authPathSkipsRefresh(path)
+  ) {
+    const rt = readRefreshToken();
+    if (rt) {
+      try {
+        const next = await fetchRefreshPair(rt);
+        writeTokens(next.accessToken, next.refreshToken);
+        return request<T>(path, opts, true);
+      } catch {
+        /* seguir y devolver el 401 original */
+      }
+    }
   }
 
   if (!res.ok) {
@@ -156,12 +215,11 @@ export type GroupSummary = {
   createdAt: string;
 };
 
-export type Place = {
+/** Fila de galería al crear el plan (fotos del anuncio). */
+export type PlanGalleryPhotoRow = {
   id: string;
-  name: string;
-  address: string;
-  lat: string;
-  lng: string;
+  sortOrder: number;
+  photo: { id: string; publicUrl: string | null; mimeType?: string | null };
 };
 
 export type PlanSummary = {
@@ -170,11 +228,11 @@ export type PlanSummary = {
   type: PlanType;
   status: string;
   scheduledAt: string;
-  place: Place;
+  venueLabel: string | null;
   groupId: string;
   createdBy?: string;
-  locationRadiusM?: number;
   requiresAllConfirm?: boolean;
+  galleryPhotos?: PlanGalleryPhotoRow[];
 };
 
 /** Validación en un plan: visible para todos los miembros del grupo. */
@@ -182,7 +240,8 @@ export type PlanValidationMemberView = {
   id: string;
   status: string;
   submittedAtServer: string;
-  photo: { id: string; publicUrl: string | null } | null;
+  photo: { id: string; publicUrl: string | null; mimeType?: string | null } | null;
+  attachments?: { id: string; photo: { id: string; publicUrl: string | null; mimeType?: string | null } }[];
   user: { id: string; name: string | null; email: string; avatarUrl: string | null };
 };
 
@@ -204,10 +263,12 @@ export type PlanSuggestionRow = {
 };
 
 export type GroupValidationPhotoRow = {
+  /** Id de la foto (único por archivo). */
   id: string;
+  validationId: string;
   status: string;
   submittedAtServer: string;
-  photo: { publicUrl: string | null };
+  photo: { id: string; publicUrl: string | null; mimeType?: string | null };
   user: { id: string; name: string | null; email: string; avatarUrl: string | null };
   plan: { id: string; title: string };
 };
@@ -262,7 +323,8 @@ export type ProfileValidationRow = {
   id: string;
   status: string;
   submittedAtServer: string;
-  photo: { id: string; publicUrl: string | null };
+  photo: { id: string; publicUrl: string | null; mimeType?: string | null };
+  attachments?: { id: string; photo: { id: string; publicUrl: string | null; mimeType?: string | null } }[];
   plan: {
     id: string;
     title: string;
@@ -270,7 +332,7 @@ export type ProfileValidationRow = {
     status: string;
     scheduledAt: string;
     group: { id: string; name: string };
-    place: { name: string };
+    venueLabel: string | null;
   };
 };
 
@@ -375,6 +437,11 @@ export const api = {
   plans: {
     listByGroup: (token: string, groupId: string, signal?: AbortSignal) =>
       request<PlanSummary[]>(`/groups/${groupId}/plans`, { token, signal }),
+    galleryInit: (token: string, groupId: string) =>
+      request<{ photoId: string; uploadUrl: string }>(`/groups/${groupId}/plans/gallery/init`, {
+        method: 'POST',
+        token,
+      }),
     create: (
       token: string,
       groupId: string,
@@ -382,9 +449,10 @@ export const api = {
         title: string;
         type: PlanType;
         scheduledAt: string;
-        place: { name: string; address: string; lat: string; lng: string };
-        locationRadiusM?: number;
+        venueLabel?: string;
         requiresAllConfirm?: boolean;
+        participants?: string[];
+        photoIds?: string[];
       },
     ) => request<PlanSummary>(`/groups/${groupId}/plans`, { method: 'POST', token, body }),
     get: (token: string, planId: string, signal?: AbortSignal) =>
@@ -396,8 +464,7 @@ export const api = {
         title?: string;
         type?: PlanType;
         scheduledAt?: string;
-        place?: { name: string; address: string; lat: string; lng: string; googlePlaceId?: string };
-        locationRadiusM?: number;
+        venueLabel?: string | null;
         requiresAllConfirm?: boolean;
       },
       signal?: AbortSignal,
@@ -437,8 +504,7 @@ export const api = {
       suggestionId: string,
       body: {
         scheduledAt: string;
-        place: { name: string; address: string; lat: string; lng: string };
-        locationRadiusM?: number;
+        venueLabel?: string;
         requiresAllConfirm?: boolean;
       },
     ) =>
@@ -467,11 +533,8 @@ export const api = {
       token: string,
       planId: string,
       body: {
-        photoId: string;
+        photoIds: string[];
         capturedAtClient: string;
-        lat: number;
-        lng: number;
-        gpsAccuracyM?: number;
         deviceInfo?: unknown;
       },
     ) => request<unknown>(`/plans/${planId}/validation/submit`, { method: 'POST', token, body }),

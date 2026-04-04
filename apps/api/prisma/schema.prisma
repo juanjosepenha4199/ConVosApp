@@ -173,20 +173,6 @@ model GroupInvite {
   @@map("group_invites")
 }
 
-model Place {
-  id            String   @id @default(uuid())
-  googlePlaceId String   @unique @map("google_place_id")
-  name          String
-  address       String
-  lat           Decimal  @db.Decimal(9, 6)
-  lng           Decimal  @db.Decimal(9, 6)
-  createdAt     DateTime @default(now()) @map("created_at")
-
-  plans Plan[]
-
-  @@map("places")
-}
-
 model Plan {
   id                 String     @id @default(uuid())
   groupId            String     @map("group_id")
@@ -194,8 +180,7 @@ model Plan {
   title              String
   type               PlanType
   scheduledAt        DateTime   @map("scheduled_at")
-  placeId            String     @map("place_id")
-  locationRadiusM    Int        @default(250) @map("location_radius_m")
+  venueLabel         String?    @map("venue_label") @db.VarChar(200)
   status             PlanStatus @default(scheduled)
   cancelledBy        String?    @map("cancelled_by")
   cancelledReason    String?    @map("cancelled_reason")
@@ -205,16 +190,31 @@ model Plan {
 
   group   Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
   creator User  @relation("PlanCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
-  place   Place @relation(fields: [placeId], references: [id], onDelete: Restrict)
 
-  participants PlanParticipant[]
-  validations  PlanValidation[]
-  points       PointsLedger[]
-  feedItems    FeedItem[]
+  participants  PlanParticipant[]
+  validations   PlanValidation[]
+  galleryPhotos PlanPhoto[]
+  points        PointsLedger[]
+  feedItems     FeedItem[]
 
   @@index([groupId])
   @@index([scheduledAt])
   @@map("plans")
+}
+
+/** Fotos adjuntas al crear el plan (galería en la ficha y listados). */
+model PlanPhoto {
+  id        String @id @default(uuid())
+  planId    String @map("plan_id")
+  photoId   String @map("photo_id")
+  sortOrder Int    @default(0) @map("sort_order")
+
+  plan  Plan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  photo Photo @relation(fields: [photoId], references: [id], onDelete: Restrict)
+
+  @@unique([planId, photoId])
+  @@index([planId])
+  @@map("plan_photos")
 }
 
 /** Idea de plan sin fecha: el grupo propone; luego se agenda y se crea un Plan real. */
@@ -259,9 +259,11 @@ model Photo {
   capturedAtClient DateTime? @map("captured_at_client")
   createdAt        DateTime  @default(now()) @map("created_at")
 
-  owner       User             @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
-  validations PlanValidation[]
-  feedItems   FeedItem[]
+  owner                 User                       @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  validations           PlanValidation[]
+  validationAttachments PlanValidationAttachment[]
+  planPhotos            PlanPhoto[]
+  feedItems             FeedItem[]
 
   @@index([sha256])
   @@index([ownerUserId])
@@ -275,21 +277,34 @@ model PlanValidation {
   photoId           String           @map("photo_id")
   capturedAtClient  DateTime         @map("captured_at_client")
   submittedAtServer DateTime         @default(now()) @map("submitted_at_server")
-  lat               Decimal          @db.Decimal(9, 6)
-  lng               Decimal          @db.Decimal(9, 6)
-  distanceToPlanM   Int              @map("distance_to_plan_m")
   status            ValidationStatus
   rejectReason      String?          @map("reject_reason")
   metadata          Json?
 
-  plan  Plan  @relation(fields: [planId], references: [id], onDelete: Cascade)
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  photo Photo @relation(fields: [photoId], references: [id], onDelete: Restrict)
+  plan         Plan                       @relation(fields: [planId], references: [id], onDelete: Cascade)
+  user         User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  photo        Photo                      @relation(fields: [photoId], references: [id], onDelete: Restrict)
+  attachments  PlanValidationAttachment[]
 
   @@unique([planId, userId])
   @@index([planId])
   @@index([userId])
   @@map("plan_validations")
+}
+
+/** Fotos o archivos adicionales de la misma validación (la primera sigue en PlanValidation.photoId). */
+model PlanValidationAttachment {
+  id               String @id @default(uuid())
+  planValidationId String @map("plan_validation_id")
+  photoId          String @map("photo_id")
+  sortOrder        Int    @default(0) @map("sort_order")
+
+  validation PlanValidation @relation(fields: [planValidationId], references: [id], onDelete: Cascade)
+  photo      Photo          @relation(fields: [photoId], references: [id], onDelete: Restrict)
+
+  @@unique([planValidationId, photoId])
+  @@index([planValidationId])
+  @@map("plan_validation_attachments")
 }
 
 model PointsLedger {

@@ -29,10 +29,10 @@ export function ConvosJoy({ className = '', size = 'md' }: ConvosJoyProps) {
 export function ConvosPartyGif({ className = '' }: { className?: string }) {
   return (
     <div
-      className={`relative flex h-28 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-fuchsia-200/90 via-violet-100 to-cyan-100 ring-2 ring-white/90 shadow-lg sm:h-32 ${className}`}
+      className={`relative flex h-28 items-center justify-center overflow-hidden rounded-2xl border border-red-500/25 bg-gradient-to-br from-red-950/80 via-zinc-950 to-black shadow-[0_0_32px_-8px_rgba(255,46,46,0.5)] ring-1 ring-white/5 sm:h-32 ${className}`}
       aria-hidden
     >
-      <span className="text-4xl sm:text-5xl">🎉</span>
+      <span className="text-4xl drop-shadow-[0_0_12px_rgba(255,80,80,0.8)] sm:text-5xl">🎉</span>
     </div>
   );
 }

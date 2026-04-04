@@ -42,7 +42,7 @@ export class ConvosJobsProcessor extends WorkerHost {
     if (!planId) return;
     const plan = await this.prisma.plan.findUnique({
       where: { id: planId },
-      include: { place: true, group: true },
+      include: { group: true },
     });
     if (!plan || plan.status !== 'scheduled') return;
 
@@ -52,7 +52,8 @@ export class ConvosJobsProcessor extends WorkerHost {
     });
 
     const title = 'Recordatorio de plan';
-    const body = `${plan.title} · ${plan.place.name} · ${new Date(plan.scheduledAt).toLocaleString('es')}`;
+    const where = plan.venueLabel?.trim() ? ` · ${plan.venueLabel.trim()}` : '';
+    const body = `${plan.title}${where} · ${new Date(plan.scheduledAt).toLocaleString('es')}`;
 
     for (const m of members) {
       await this.notifications.sendToUser(m.userId, {

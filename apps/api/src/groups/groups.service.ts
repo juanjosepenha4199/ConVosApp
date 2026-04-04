@@ -7,6 +7,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { GroupRole } from '@prisma/client';
 import { nanoid } from 'nanoid';
 
+const galleryPhotoSelect = {
+  id: true,
+  publicUrl: true,
+  mimeType: true,
+} as const;
+
 @Injectable()
 export class GroupsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -152,22 +158,72 @@ export class GroupsService {
     }));
   }
 
-  /** Fotos de validación de todos los miembros (mismo grupo). */
+  /** Una fila por imagen/archivo (principal + adjuntos), más recientes primero. */
   async listValidationGallery(groupId: string, userId: string, limit = 24) {
     await this.requireMember(groupId, userId);
     const take = Math.min(Math.max(Number(limit) || 24, 1), 80);
-    return this.prisma.planValidation.findMany({
+    const scanValidations = Math.min(take * 4, 120);
+
+    const validations = await this.prisma.planValidation.findMany({
       where: {
         plan: { groupId },
         photo: { publicUrl: { not: null } },
       },
       orderBy: { submittedAtServer: 'desc' },
-      take,
+      take: scanValidations,
       include: {
-        photo: { select: { publicUrl: true } },
-        user: { select: { id: true, name: true, email: true, avatarUrl: true } },
+        photo: { select: { ...galleryPhotoSelect } },
+        attachments: {
+          orderBy: { sortOrder: 'asc' },
+          include: { photo: { select: { ...galleryPhotoSelect } } },
+        },
+        user: {
+          select: { id: true, name: true, email: true, avatarUrl: true },
+        },
         plan: { select: { id: true, title: true } },
       },
     });
+
+    type Row = {
+      id: string;
+      validationId: string;
+      status: string;
+      submittedAtServer: Date;
+      photo: { id: string; publicUrl: string | null; mimeType: string | null };
+      user: { id: string; name: string | null; email: string; avatarUrl: string | null };
+      plan: { id: string; title: string };
+    };
+
+    const flat: Row[] = [];
+    outer: for (const v of validations) {
+      if (v.photo.publicUrl) {
+        flat.push({
+          id: v.photo.id,
+          validationId: v.id,
+          status: v.status,
+          submittedAtServer: v.submittedAtServer,
+          photo: v.photo,
+          user: v.user,
+          plan: v.plan,
+        });
+        if (flat.length >= take) break outer;
+      }
+      for (const a of v.attachments) {
+        if (a.photo.publicUrl) {
+          flat.push({
+            id: a.photo.id,
+            validationId: v.id,
+            status: v.status,
+            submittedAtServer: v.submittedAtServer,
+            photo: a.photo,
+            user: v.user,
+            plan: v.plan,
+          });
+          if (flat.length >= take) break outer;
+        }
+      }
+    }
+
+    return flat;
   }
 }

@@ -35,12 +35,13 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto) {
-    const existing = await this.users.findByEmail(dto.email);
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.users.findByEmail(email);
     if (existing) throw new BadRequestException('EMAIL_ALREADY_IN_USE');
 
     const passwordHash = await bcrypt.hash(dto.password, 12);
     const user = await this.users.createLocalUser({
-      email: dto.email,
+      email,
       passwordHash,
       name: dto.name ?? null,
     });
@@ -49,7 +50,7 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
-    const user = await this.users.findByEmail(dto.email);
+    const user = await this.users.findByEmail(dto.email.trim().toLowerCase());
     if (!user?.passwordHash)
       throw new UnauthorizedException('INVALID_CREDENTIALS');
 

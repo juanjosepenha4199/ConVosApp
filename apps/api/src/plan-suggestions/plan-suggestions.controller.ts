@@ -64,8 +64,7 @@ export class PlanSuggestionsController {
   ) {
     return this.suggestions.schedule(groupId, suggestionId, req.user.userId, {
       scheduledAt: new Date(dto.scheduledAt),
-      place: dto.place,
-      locationRadiusM: dto.locationRadiusM,
+      venueLabel: dto.venueLabel,
       requiresAllConfirm: dto.requiresAllConfirm,
       participants: dto.participants,
     });

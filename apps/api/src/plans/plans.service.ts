@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -8,17 +9,14 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { GroupsService } from '../groups/groups.service';
-import { Decimal } from '@prisma/client/runtime/library';
 import { GroupRole, PlanStatus } from '@prisma/client';
-import { nanoid } from 'nanoid';
+import { createHash } from 'crypto';
 
-type PlaceInput = {
-  googlePlaceId?: string;
-  name: string;
-  address: string;
-  lat: string;
-  lng: string;
-};
+const galleryPhotoSelect = {
+  id: true,
+  publicUrl: true,
+  mimeType: true,
+} as const;
 
 @Injectable()
 export class PlansService {
@@ -28,26 +26,45 @@ export class PlansService {
     @Optional() @InjectQueue('convos') private readonly convosQueue?: Queue,
   ) {}
 
-  private toDecimal(s: string) {
-    return new Decimal(s);
+  async initGalleryPhoto(groupId: string, userId: string) {
+    await this.groups.requireMember(groupId, userId);
+    const photo = await this.prisma.photo.create({
+      data: {
+        ownerUserId: userId,
+        storageKey: `pending/gallery/${groupId}/${Date.now()}`,
+      },
+    });
+    return {
+      photoId: photo.id,
+      uploadUrl: `/api/v1/groups/${groupId}/plans/gallery/upload?photoId=${photo.id}`,
+    };
   }
 
-  async upsertPlace(input: PlaceInput) {
-    const key = input.googlePlaceId?.trim() || `manual_${nanoid(12)}`;
-    return this.prisma.place.upsert({
-      where: { googlePlaceId: key },
-      update: {
-        name: input.name,
-        address: input.address,
-        lat: this.toDecimal(input.lat),
-        lng: this.toDecimal(input.lng),
-      },
-      create: {
-        googlePlaceId: key,
-        name: input.name,
-        address: input.address,
-        lat: this.toDecimal(input.lat),
-        lng: this.toDecimal(input.lng),
+  async attachGalleryUpload(input: {
+    groupId: string;
+    userId: string;
+    photoId: string;
+    buffer: Buffer;
+    filename: string;
+    mimeType: string | null;
+  }) {
+    await this.groups.requireMember(input.groupId, input.userId);
+    const photo = await this.prisma.photo.findUnique({
+      where: { id: input.photoId },
+    });
+    if (!photo) throw new NotFoundException('PHOTO_NOT_FOUND');
+    if (photo.ownerUserId !== input.userId)
+      throw new ForbiddenException('NOT_OWNER');
+
+    const sha256 = createHash('sha256').update(input.buffer).digest('hex');
+
+    return this.prisma.photo.update({
+      where: { id: input.photoId },
+      data: {
+        sha256,
+        storageKey: input.filename,
+        publicUrl: `/uploads/${input.filename}`,
+        mimeType: input.mimeType,
       },
     });
   }
@@ -58,17 +75,45 @@ export class PlansService {
     title: string;
     type: any;
     scheduledAt: Date;
-    place: PlaceInput;
-    locationRadiusM?: number;
+    venueLabel?: string | null;
     requiresAllConfirm?: boolean;
     participants?: string[];
+    photoIds?: string[];
   }) {
     await this.groups.requireMember(input.groupId, input.userId);
-    const place = await this.upsertPlace(input.place);
 
     const participants = Array.from(
       new Set([input.userId, ...(input.participants ?? [])]),
     );
+
+    const venue =
+      input.venueLabel?.trim() ||
+      (input.title?.trim() ? input.title.trim().slice(0, 200) : null);
+
+    const seen = new Set<string>();
+    const galleryIds: string[] = [];
+    for (const id of input.photoIds ?? []) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        galleryIds.push(id);
+      }
+    }
+    if (galleryIds.length > 8) throw new BadRequestException('TOO_MANY_PLAN_PHOTOS');
+
+    if (galleryIds.length) {
+      const photos = await this.prisma.photo.findMany({
+        where: { id: { in: galleryIds } },
+      });
+      if (photos.length !== galleryIds.length)
+        throw new NotFoundException('PHOTO_NOT_FOUND');
+      const byId = new Map(photos.map((p) => [p.id, p]));
+      for (const id of galleryIds) {
+        const p = byId.get(id)!;
+        if (p.ownerUserId !== input.userId)
+          throw new ForbiddenException('NOT_OWNER');
+        if (!p.publicUrl) throw new BadRequestException('PHOTO_NOT_UPLOADED');
+      }
+    }
 
     const plan = await this.prisma.plan.create({
       data: {
@@ -77,8 +122,7 @@ export class PlansService {
         title: input.title,
         type: input.type,
         scheduledAt: input.scheduledAt,
-        placeId: place.id,
-        locationRadiusM: input.locationRadiusM ?? 250,
+        venueLabel: venue,
         requiresAllConfirm: input.requiresAllConfirm ?? false,
         participants: {
           create: participants.map((userId) => ({
@@ -86,10 +130,23 @@ export class PlansService {
             status: userId === input.userId ? 'accepted' : 'invited',
           })),
         },
+        ...(galleryIds.length
+          ? {
+              galleryPhotos: {
+                create: galleryIds.map((photoId, idx) => ({
+                  photoId,
+                  sortOrder: idx,
+                })),
+              },
+            }
+          : {}),
       },
       include: {
-        place: true,
         participants: true,
+        galleryPhotos: {
+          orderBy: { sortOrder: 'asc' },
+          include: { photo: { select: { ...galleryPhotoSelect } } },
+        },
       },
     });
 
@@ -136,8 +193,14 @@ export class PlansService {
             }
           : {}),
       },
-      include: { place: true },
       orderBy: { scheduledAt: 'asc' },
+      include: {
+        galleryPhotos: {
+          orderBy: { sortOrder: 'asc' },
+          take: 4,
+          include: { photo: { select: { ...galleryPhotoSelect } } },
+        },
+      },
     });
   }
 
@@ -145,12 +208,21 @@ export class PlansService {
     const plan = await this.prisma.plan.findUnique({
       where: { id: planId },
       include: {
-        place: true,
         participants: true,
+        galleryPhotos: {
+          orderBy: { sortOrder: 'asc' },
+          include: { photo: { select: { ...galleryPhotoSelect } } },
+        },
         validations: {
           orderBy: { submittedAtServer: 'desc' },
           include: {
-            photo: { select: { id: true, publicUrl: true } },
+            photo: { select: { id: true, publicUrl: true, mimeType: true } },
+            attachments: {
+              orderBy: { sortOrder: 'asc' },
+              include: {
+                photo: { select: { id: true, publicUrl: true, mimeType: true } },
+              },
+            },
             user: {
               select: { id: true, name: true, email: true, avatarUrl: true },
             },
@@ -186,25 +258,33 @@ export class PlansService {
     if (patch.type !== undefined) data.type = patch.type;
     if (patch.scheduledAt !== undefined)
       data.scheduledAt = new Date(patch.scheduledAt);
-    if (patch.locationRadiusM !== undefined)
-      data.locationRadiusM = patch.locationRadiusM;
     if (typeof patch.requiresAllConfirm === 'boolean')
       data.requiresAllConfirm = patch.requiresAllConfirm;
-    if (patch.place) {
-      const place = await this.upsertPlace(patch.place);
-      data.placeId = place.id;
+    if (patch.venueLabel !== undefined) {
+      const v = patch.venueLabel;
+      data.venueLabel =
+        typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : null;
     }
 
     const updated = await this.prisma.plan.update({
       where: { id: planId },
       data,
       include: {
-        place: true,
         participants: true,
+        galleryPhotos: {
+          orderBy: { sortOrder: 'asc' },
+          include: { photo: { select: { ...galleryPhotoSelect } } },
+        },
         validations: {
           orderBy: { submittedAtServer: 'desc' },
           include: {
-            photo: { select: { id: true, publicUrl: true } },
+            photo: { select: { id: true, publicUrl: true, mimeType: true } },
+            attachments: {
+              orderBy: { sortOrder: 'asc' },
+              include: {
+                photo: { select: { id: true, publicUrl: true, mimeType: true } },
+              },
+            },
             user: {
               select: { id: true, name: true, email: true, avatarUrl: true },
             },
